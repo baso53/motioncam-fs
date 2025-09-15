@@ -1,14 +1,15 @@
 #include "Utils.h"
-#include "Measure.h"
 
 #include "CameraFrameMetadata.h"
 #include "CameraMetadata.h"
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <vector>
+#include <dispatch/dispatch.h>
 
-#include <boost/iostreams/stream.hpp>
-#include <boost/iostreams/device/back_inserter.hpp>
+#include <arm_neon.h>
 
 #define TINY_DNG_WRITER_IMPLEMENTATION 1
 
@@ -168,8 +169,6 @@ void encodeTo10Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo10Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -202,8 +201,6 @@ void encodeTo12Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo12Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -231,8 +228,6 @@ void encodeTo14Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo14Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -273,137 +268,163 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short> 
     bool applyShadingMap=true,
     bool normaliseShadingMap=false)
 {
-    if (scale > 1) {
-        // Ensure even scale for downscaling
-        scale = (scale / 2) * 2;
-    }
-    else {
-        // No scaling
-        scale = 1;
-    }
-
-    // Calculate new dimensions
-    uint32_t newWidth = inOutWidth / scale;
-    uint32_t newHeight = inOutHeight / scale;
-
-    // Align to 4 for bayer pattern and also because we read 4 bytes at a time when encoding to 10/14 bit
-    newWidth = (newWidth / 4) * 4;
-    newHeight = (newHeight / 4) * 4;
-
-    const auto& srcBlackLevel = metadata.dynamicBlackLevel[0] > 0.0f ? metadata.dynamicBlackLevel : cameraConfiguration.blackLevel;
-    const auto srcWhiteLevel = metadata.dynamicWhiteLevel > 0.0f ? metadata.dynamicWhiteLevel : cameraConfiguration.whiteLevel;
-
-    const std::array<float, 4> linear = {
-        1.0f / (srcWhiteLevel - srcBlackLevel[0]),
-        1.0f / (srcWhiteLevel - srcBlackLevel[1]),
-        1.0f / (srcWhiteLevel - srcBlackLevel[2]),
-        1.0f / (srcWhiteLevel - srcBlackLevel[3])
+    if (scale > 1) scale = (scale / 2) * 2; else scale = 1;
+    
+    uint32_t newWidth  = (inOutWidth  / scale) & ~3u;
+    uint32_t newHeight = (inOutHeight / scale) & ~3u;
+    
+    const auto& srcBlackLevel = metadata.dynamicBlackLevel[0] > 0.f
+    ? metadata.dynamicBlackLevel    : cameraConfiguration.blackLevel;
+    const auto  srcWhiteLevel = metadata.dynamicWhiteLevel > 0.f
+    ? metadata.dynamicWhiteLevel    : cameraConfiguration.whiteLevel;
+    
+    const std::array<float,4> linear = {
+        1.f / (srcWhiteLevel - srcBlackLevel[0]),
+        1.f / (srcWhiteLevel - srcBlackLevel[1]),
+        1.f / (srcWhiteLevel - srcBlackLevel[2]),
+        1.f / (srcWhiteLevel - srcBlackLevel[3])
     };
-
-    auto dstBlackLevel = srcBlackLevel;
-    auto dstWhiteLevel = srcWhiteLevel;
-
-    // Calculate shading map offsets
-    auto lensShadingMap = metadata.lensShadingMap;
-
-    const int fullWidth = metadata.originalWidth;
-    const int fullHeight = metadata.originalHeight;
-
-    const int left = (fullWidth - inOutWidth) / 2;
-    const int top = (fullHeight - inOutHeight) / 2;
-
-    const float shadingMapScaleX = 1.0f / static_cast<float>(fullWidth);
-    const float shadingMapScaleY = 1.0f / static_cast<float>(fullHeight);
-
-    // When applying shading map, increase precision
-    if(applyShadingMap) {
+    
+    auto   dstBlackLevel = srcBlackLevel;
+    float  dstWhiteLevel = srcWhiteLevel;
+    
+    auto   lensShadingMap = metadata.lensShadingMap;
+    if (applyShadingMap) {
         int srcBits = bitsNeeded(static_cast<unsigned short>(cameraConfiguration.whiteLevel));
         int useBits = std::min(16, srcBits + 4);
-
-        dstWhiteLevel = std::pow(2.0f, useBits) - 1;
-
-        for(auto& v : dstBlackLevel)
-            v *= (1 << (useBits - srcBits));
-
+        
+        dstWhiteLevel = std::pow(2.f, useBits) - 1.f;
+        for (auto& v : dstBlackLevel) v *= (1 << (useBits - srcBits));
         if(normaliseShadingMap)
             normalizeShadingMap(lensShadingMap);
     }
-
-    //
-    // Preprocess data
-    //
-
-    uint32_t originalWidth = inOutWidth;
-    uint32_t dstOffset = 0;
-
-    // Reinterpret the input data as uint16_t for reading
-    uint16_t* srcData = reinterpret_cast<uint16_t*>(data.data());
-
-    // Process the image by copying and packing 2x2 Bayer blocks
-    std::array<float, 4> shadingMapVals { 1.0f, 1.0f, 1.0f, 1.0f };
-    std::vector<uint8_t> dst;
-
-    dst.resize(sizeof(uint16_t) * newWidth * newHeight);
-    uint16_t* dstData = reinterpret_cast<uint16_t*>(dst.data());
-
-    for (auto y = 0; y < newHeight; y += 2) {
-        for (auto x = 0; x < newWidth; x += 2) {
-            // Get the source coordinates (scaled)
-            uint32_t srcY = y * scale;
-            uint32_t srcX = x * scale;
-
-            auto s0 = srcData[srcY * originalWidth + srcX];
-            auto s1 = srcData[srcY * originalWidth + srcX + 1];
-            auto s2 = srcData[(srcY + 1) * originalWidth + srcX];
-            auto s3 = srcData[(srcY + 1) * originalWidth + srcX + 1];
-
-            if(applyShadingMap) {
-                // Calculate position in shading map
+    
+    const int blocksX = newWidth  / 2;
+    const int blocksY = newHeight / 2;
+    std::vector<std::array<float,4>> shadingLUT;
+    if (applyShadingMap)
+        shadingLUT.resize(static_cast<size_t>(blocksX * blocksY));
+    
+    const int fullWidth  = metadata.originalWidth;
+    const int fullHeight = metadata.originalHeight;
+    const int left       = (fullWidth  - inOutWidth ) / 2;
+    const int top        = (fullHeight - inOutHeight) / 2;
+    
+    const float shadingMapScaleX = 1.f / fullWidth;
+    const float shadingMapScaleY = 1.f / fullHeight;
+    
+    if (applyShadingMap) {
+        size_t idx = 0;
+        for (int by = 0; by < blocksY; ++by)
+            for (int bx = 0; bx < blocksX; ++bx, ++idx)
+            {
+                const uint32_t srcX = bx * 2 * scale;
+                const uint32_t srcY = by * 2 * scale;
                 const float sx = (srcX + left) * shadingMapScaleX;
-                const float sy = (srcY + top) * shadingMapScaleY;
-
-                // Calculate shading map
-                shadingMapVals = {
-                    getShadingMapValue(sx, sy, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight),
-                    getShadingMapValue(sx, sy, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight),
-                    getShadingMapValue(sx, sy, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight),
-                    getShadingMapValue(sx, sy, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight)
+                const float sy = (srcY + top ) * shadingMapScaleY;
+                
+                shadingLUT[idx] = {
+                    getShadingMapValue(sx, sy, 0, lensShadingMap,
+                                       metadata.lensShadingMapWidth,
+                                       metadata.lensShadingMapHeight),
+                    getShadingMapValue(sx, sy, 1, lensShadingMap,
+                                       metadata.lensShadingMapWidth,
+                                       metadata.lensShadingMapHeight),
+                    getShadingMapValue(sx, sy, 2, lensShadingMap,
+                                       metadata.lensShadingMapWidth,
+                                       metadata.lensShadingMapHeight),
+                    getShadingMapValue(sx, sy, 3, lensShadingMap,
+                                       metadata.lensShadingMapWidth,
+                                       metadata.lensShadingMapHeight)
                 };
             }
-
-            // Linearize and (maybe) apply shading map
-            const float p0 = std::max(0.0f, linear[0] * (s0 - srcBlackLevel[0]) * shadingMapVals[cfa[0]]) * (dstWhiteLevel - dstBlackLevel[0]);
-            const float p1 = std::max(0.0f, linear[1] * (s1 - srcBlackLevel[1]) * shadingMapVals[cfa[1]]) * (dstWhiteLevel - dstBlackLevel[1]);
-            const float p2 = std::max(0.0f, linear[2] * (s2 - srcBlackLevel[2]) * shadingMapVals[cfa[2]]) * (dstWhiteLevel - dstBlackLevel[2]);
-            const float p3 = std::max(0.0f, linear[3] * (s3 - srcBlackLevel[3]) * shadingMapVals[cfa[3]]) * (dstWhiteLevel - dstBlackLevel[3]);
-
-            s0 = std::clamp(std::round((p0 + dstBlackLevel[0])), 0.f, dstWhiteLevel);
-            s1 = std::clamp(std::round((p1 + dstBlackLevel[1])), 0.f, dstWhiteLevel);
-            s2 = std::clamp(std::round((p2 + dstBlackLevel[2])), 0.f, dstWhiteLevel);
-            s3 = std::clamp(std::round((p3 + dstBlackLevel[3])), 0.f, dstWhiteLevel);
-
-            // Copy the 2x2 Bayer block
-            dstData[dstOffset]                 = static_cast<unsigned short>(s0);
-            dstData[dstOffset + 1]             = static_cast<unsigned short>(s1);
-            dstData[dstOffset + newWidth]      = static_cast<unsigned short>(s2);
-            dstData[dstOffset + newWidth + 1]  = static_cast<unsigned short>(s3);
-
-            dstOffset += 2;
-        }
-
-        dstOffset += newWidth;
     }
+    
+    std::vector<uint8_t> dst(sizeof(uint16_t) * newWidth * newHeight);
+    uint16_t*            dstData = reinterpret_cast<uint16_t*>(dst.data());
+    uint16_t*            srcData = reinterpret_cast<uint16_t*>(data.data());
+    const uint32_t       srcStride = inOutWidth;
 
-    // Update dimensions
-    inOutWidth = newWidth;
+    dispatch_apply(blocksY, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^(size_t by) {
+        const size_t lutRow  = static_cast<size_t>(by * blocksX);
+        const uint32_t dstRow0 = by * 2 * newWidth;
+        const uint32_t dstRow1 = dstRow0 + newWidth;
+        
+        const uint32_t srcRow0 = by * 2 * scale * srcStride;
+        const uint32_t srcRow1 = srcRow0 + srcStride * scale;
+        
+        for (int bx = 0; bx < blocksX; ++bx)
+        {
+            const size_t lutIdx = lutRow + bx;
+            const uint32_t srcCol = bx * 2 * scale;
+            
+            const uint16_t s0 = srcData[srcRow0 + srcCol];
+            const uint16_t s1 = srcData[srcRow0 + srcCol + 1];
+            const uint16_t s2 = srcData[srcRow1 + srcCol];
+            const uint16_t s3 = srcData[srcRow1 + srcCol + 1];
+            
+            float shade0 = 1.f, shade1 = 1.f, shade2 = 1.f, shade3 = 1.f;
+            if (applyShadingMap) {
+                const auto& lut = shadingLUT[lutIdx];
+                shade0 = lut[cfa[0]];
+                shade1 = lut[cfa[1]];
+                shade2 = lut[cfa[2]];
+                shade3 = lut[cfa[3]];
+            }
+
+            uint16x4_t s     = {s0, s1, s2, s3};
+            float32x4_t sf   = vcvtq_f32_u32(vmovl_u16(s));
+            
+            const float blackArr[4] = {
+                srcBlackLevel[0], srcBlackLevel[1],
+                srcBlackLevel[2], srcBlackLevel[3]};
+            const float linArr[4]   = {linear[0], linear[1], linear[2], linear[3]};
+            const float shadeArr[4] = {shade0, shade1, shade2, shade3};
+            const float dstBLArr[4] = {
+                dstBlackLevel[0], dstBlackLevel[1],
+                dstBlackLevel[2], dstBlackLevel[3]};
+            const float dstScaleArr[4] = {
+                dstWhiteLevel - dstBlackLevel[0],
+                dstWhiteLevel - dstBlackLevel[1],
+                dstWhiteLevel - dstBlackLevel[2],
+                dstWhiteLevel - dstBlackLevel[3]};
+            
+            float32x4_t vBlack  = vld1q_f32(blackArr);
+            float32x4_t vLinear = vld1q_f32(linArr);
+            float32x4_t vShade  = vld1q_f32(shadeArr);
+            float32x4_t vDstBL  = vld1q_f32(dstBLArr);
+            float32x4_t vDstScl = vld1q_f32(dstScaleArr);
+            
+            float32x4_t v = vmaxq_f32(vdupq_n_f32(0.f),
+                                      vmulq_f32(vLinear,
+                                                vmulq_f32(vShade,
+                                                          vsubq_f32(sf, vBlack))));
+            v = vmlaq_f32(vDstBL, v, vDstScl);                 // vDstBL + v * scale
+            v = vminq_f32(v, vdupq_n_f32(dstWhiteLevel));       // clamp
+            
+            uint32x4_t ui = vcvtq_u32_f32(v);
+            uint16x4_t us = vmovn_u32(ui);
+            
+            /* store */
+            uint32_t dstOff = bx * 2;
+            // us = {d0, d1, d2, d3}
+            dstData[dstRow0 + dstOff    ] = vget_lane_u16(us, 0);
+            dstData[dstRow0 + dstOff + 1] = vget_lane_u16(us, 1);
+            dstData[dstRow1 + dstOff    ] = vget_lane_u16(us, 2);
+            dstData[dstRow1 + dstOff + 1] = vget_lane_u16(us, 3);
+        }
+    });
+    
+    inOutWidth  = newWidth;
     inOutHeight = newHeight;
-
+    
     std::array<unsigned short, 4> blackLevelResult;
-
-    for(auto i = 0; i < dstBlackLevel.size(); ++i)
-        blackLevelResult[i] = static_cast<unsigned short>(std::round(dstBlackLevel[i]));
-
-    return std::make_tuple(dst, blackLevelResult, static_cast<unsigned short>(dstWhiteLevel));
+    for (size_t i = 0; i < 4; ++i)
+        blackLevelResult[i] =
+        static_cast<unsigned short>(std::round(dstBlackLevel[i]));
+    
+    return { std::move(dst), blackLevelResult,
+        static_cast<unsigned short>(dstWhiteLevel) };
 }
 
 std::shared_ptr<std::vector<char>> generateDng(
@@ -415,8 +436,6 @@ std::shared_ptr<std::vector<char>> generateDng(
     FileRenderOptions options,
     int scale)
 {
-    Measure m("generateDng");
-
     unsigned int width = metadata.width;
     unsigned int height = metadata.height;
 
@@ -446,8 +465,8 @@ std::shared_ptr<std::vector<char>> generateDng(
         scale,
         applyShadingMap, normalizeShadingMap);
 
-    spdlog::debug("New black level {},{},{},{} and white level {}",
-                  dstBlackLevel[0], dstBlackLevel[1], dstBlackLevel[2], dstBlackLevel[3], dstWhiteLevel);
+//    spdlog::debug("New black level {},{},{},{} and white level {}",
+//                  dstBlackLevel[0], dstBlackLevel[1], dstBlackLevel[2], dstBlackLevel[3], dstWhiteLevel);
 
     // Encode to reduce size in container
     auto encodeBits = bitsNeeded(dstWhiteLevel);

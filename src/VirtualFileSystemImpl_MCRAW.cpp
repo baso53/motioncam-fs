@@ -3,16 +3,10 @@
 #include "CameraMetadata.h"
 #include "Utils.h"
 #include "AudioWriter.h"
-#include "LRUCache.h"
 
 #include <motioncam/Decoder.hpp>
 
-#include <boost/filesystem.hpp>
-#include <boost/regex.hpp>
-#include <boost/algorithm/string.hpp>
-
-#include <BS_thread_pool.hpp>
-#include <spdlog/spdlog.h>
+#include <filesystem>
 #include <audiofile/AudioFile.h>
 
 #include <algorithm>
@@ -43,7 +37,7 @@ IconSize=16
 #endif
 
     std::string extractFilenameWithoutExtension(const std::string& fullPath) {
-        boost::filesystem::path p(fullPath);
+        std::filesystem::path p(fullPath);
         return p.stem().string();
     }
 
@@ -119,7 +113,7 @@ IconSize=16
         // Calculate drift between the video and audio
         auto audioVideoDriftMs = (audioChunks[0].first - videoTimestamp) * 1e-6f;
         if(std::abs(audioVideoDriftMs) > 1000) {
-            spdlog::warn("Audio drift too large, not syncing audio");
+            // spdlog::warn("Audio drift too large, not syncing audio");
             return;
         }
 
@@ -179,16 +173,7 @@ IconSize=16
     }
 }
 
-VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(
-        BS::thread_pool& ioThreadPool,
-        BS::thread_pool& processingThreadPool,
-        LRUCache& lruCache,
-        FileRenderOptions options,
-        int draftScale,
-        const std::string& file) :
-        mCache(lruCache),
-        mIoThreadPool(ioThreadPool),
-        mProcessingThreadPool(processingThreadPool),
+VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(const std::string& file) :
         mSrcPath(file),
         mBaseName(extractFilenameWithoutExtension(file)),
         mTypicalDngSize(0),
@@ -197,14 +182,10 @@ VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(
         mDroppedFrames(0),
         mWidth(0),
         mHeight(0),
-        mDraftScale(draftScale),
-        mOptions(options) {
+        mDraftScale(0),
+        mOptions(FileRenderOptions::RENDER_OPT_NONE) {
 
-    init(options);
-}
-
-VirtualFileSystemImpl_MCRAW::~VirtualFileSystemImpl_MCRAW() {
-    spdlog::info("Destroying VirtualFileSystemImpl_MCRAW({})", mSrcPath);
+    init(FileRenderOptions::RENDER_OPT_NONE);
 }
 
 void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
@@ -215,7 +196,7 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
     if(frames.empty())
         return;
 
-    spdlog::debug("VirtualFileSystemImpl_MCRAW::init(options={})", optionsToString(options));
+    // spdlog::debug("VirtualFileSystemImpl_MCRAW::init(options={})", optionsToString(options));
 
     // Clear everything
     mFiles.clear();
@@ -315,6 +296,13 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
             ++lastPts;
         }
     }
+
+    generateFrameHolder = std::make_unique<motioncam::GenerateFrameHolder>(
+        mSrcPath,
+        FileRenderOptions::RENDER_OPT_NONE,
+        mFps,
+        mDraftScale
+    );
 }
 
 std::vector<Entry> VirtualFileSystemImpl_MCRAW::listFiles(const std::string& filter) const {
@@ -324,11 +312,117 @@ std::vector<Entry> VirtualFileSystemImpl_MCRAW::listFiles(const std::string& fil
 
 std::optional<Entry> VirtualFileSystemImpl_MCRAW::findEntry(const std::string& fullPath) const {
     for(const auto& e : mFiles) {
-        if(boost::filesystem::path(fullPath).relative_path() == e.getFullPath())
+        if(std::filesystem::path(fullPath).relative_path() == e.getFullPath())
             return e;
     }
 
     return {};
+}
+
+GenerateFrameHolder::GenerateFrameHolder(
+                                         const std::string& srcPath,
+                                         FileRenderOptions options,
+                                         float fps,
+                                         int draftScale)
+: mSrcPath(srcPath)
+, mOptions(options)
+, mFps(fps)
+, mDraftScale(draftScale)
+, sSharedDecoder(std::make_unique<Decoder>(srcPath))
+{}
+
+size_t GenerateFrameHolder::generateFrame(
+    const Entry& entry,
+    const size_t pos,
+    const size_t len,
+    void* dst,
+    std::function<void(size_t, int)> result,
+    bool async)
+{
+    // Try to get from cache first
+    for (auto it = mCache.begin(); it != mCache.end(); ++it) {
+        if (it->entry == entry && it->data && pos < it->data->size()) {
+            const size_t actualLen = std::min(len, it->data->size() - pos);
+            std::memcpy(dst, it->data->data() + pos, actualLen);
+            auto ce = std::move(*it);
+            mCache.erase(it);
+            mCache.push_back(std::move(ce));
+            return actualLen;
+        }
+    }
+
+    std::tuple<size_t, CameraConfiguration, CameraFrameMetadata, std::shared_ptr<std::vector<uint8_t>>> decodedFrame;
+    try {
+        auto timestamp = std::get<Timestamp>(entry.userData);
+
+        // spdlog::debug("Reading frame {} with options {}", timestamp, optionsToString(mOptions));
+        auto data = std::make_shared<std::vector<uint8_t>>();
+        nlohmann::json metadata;
+        auto allFrames = sSharedDecoder->getFrames();
+        // Find the frame (index)
+        auto it = std::find(allFrames.begin(), allFrames.end(), timestamp);
+        if(it == allFrames.end()) {
+            // spdlog::error("Frame {} not found", timestamp);
+            throw std::runtime_error("Failed to find frame");
+        }
+
+        sSharedDecoder->loadFrame(timestamp, *data, metadata);
+
+        size_t frameIndex = std::distance(allFrames.begin(), it);
+
+        decodedFrame = std::make_tuple(
+            frameIndex,
+            CameraConfiguration::parse(sSharedDecoder->getContainerMetadata()),
+            CameraFrameMetadata::parse(metadata),
+            std::move(data));
+    }
+    catch(std::runtime_error& e) {
+        // spdlog::error("Failed to decode frame (error: {})", e.what());
+        result(0, -1);
+        return async ? 0 : 0;
+    }
+
+    // Generate the DNG and copy to dst
+    size_t readBytes = 0;
+    int errorCode = -1;
+    auto [frameIndex, containerMetadata, frameMetadata, frameData] = std::move(decodedFrame);
+
+    // spdlog::debug("Generating {}", entry.name);
+
+    try {
+        auto dngData = utils::generateDng(
+            *frameData,
+            frameMetadata,
+            containerMetadata,
+            mFps,
+            frameIndex,
+            mOptions,
+            getScaleFromOptions(mOptions, mDraftScale));
+
+        if(dngData && pos < dngData->size()) {
+            const size_t actualLen = std::min(len, dngData->size() - pos);
+            std::memcpy(dst, dngData->data() + pos, actualLen);
+            readBytes = actualLen;
+            errorCode = 0;
+        }
+
+        mCache.push_back({entry, dngData});
+        if (mCache.size() > MAX_CACHE_SIZE) {
+            mCache.pop_front();
+        }
+    }
+    catch(std::runtime_error& e) {
+        // spdlog::error("Failed to generate DNG (error: {})", e.what());
+    }
+
+    // Invoke callback
+    result(readBytes, errorCode);
+
+    // Return according to sync/async flag
+    if(async)
+        return 0;
+    else
+        return readBytes;
 }
 
 size_t VirtualFileSystemImpl_MCRAW::generateFrame(
@@ -339,111 +433,7 @@ size_t VirtualFileSystemImpl_MCRAW::generateFrame(
     std::function<void(size_t, int)> result,
     bool async)
 {
-    using FrameData = std::tuple<size_t, CameraConfiguration, CameraFrameMetadata, std::shared_ptr<std::vector<uint8_t>>>;
-
-    // Try to get from cache first
-    auto cacheEntry = mCache.get(entry);
-    if(cacheEntry && pos < cacheEntry->size()) {
-        // Calculate length to copy
-        const size_t actualLen = (std::min)(len, cacheEntry->size() - pos);
-
-        // Copy the data from cache
-        std::memcpy(dst, cacheEntry->data() + pos, actualLen);
-
-        // Push entry to front
-        mCache.put(entry, cacheEntry);
-
-        return actualLen;
-    }
-
-    // Use IO thread pool to decode frame
-    auto frameDataFuture = mIoThreadPool.submit_task([entry, &srcPath = mSrcPath, &options = mOptions]() -> FrameData {
-        thread_local std::map<std::string, std::unique_ptr<Decoder>> decoders;
-
-        auto timestamp = std::get<Timestamp>(entry.userData);
-
-        spdlog::debug("Reading frame {} with options {}", timestamp, optionsToString(options));
-
-        if(decoders.find(srcPath) == decoders.end()) {
-            decoders[srcPath] = std::make_unique<Decoder>(srcPath);
-        }
-
-        auto& decoder = decoders[srcPath];
-        auto data = std::make_shared<std::vector<uint8_t>>();
-
-        nlohmann::json metadata;
-        auto allFrames = decoder->getFrames();
-
-        // Find the frame (index)
-        auto it = std::find(allFrames.begin(), allFrames.end(), timestamp);
-        if(it == allFrames.end()) {
-            spdlog::error("Frame {} not found", timestamp);
-            throw std::runtime_error("Failed to find frame");
-        }
-
-        decoder->loadFrame(timestamp, *data, metadata);
-
-        size_t frameIndex = std::distance(allFrames.begin(), it);
-
-        return std::make_tuple(
-            frameIndex, CameraConfiguration::parse(decoder->getContainerMetadata()), CameraFrameMetadata::parse(metadata), std::move(data));
-    });
-
-
-    // Use processing thread pool to generate DNG
-    auto sharableFuture = frameDataFuture.share();
-
-    const auto fps = mFps;
-    const auto draftScale = mDraftScale;
-
-    auto generateTask = [&options = mOptions, &cache = mCache, entry, sharableFuture, fps, draftScale, pos, len, dst, result]() {
-        size_t readBytes = 0;
-        int errorCode = -1;
-
-        try {
-            auto decodedFrame = sharableFuture.get();
-            auto [frameIndex, containerMetadata, frameMetadata, frameData] = std::move(decodedFrame);
-
-            spdlog::debug("Generating {}", entry.name);
-
-            auto dngData = utils::generateDng(
-                *frameData,
-                frameMetadata,
-                containerMetadata,
-                fps,
-                frameIndex,
-                options,
-                getScaleFromOptions(options, draftScale));
-
-            if(dngData && pos < dngData->size()) {
-                // Calculate length to copy
-                const size_t actualLen = (std::min)(len, dngData->size() - pos);
-
-                std::memcpy(dst, dngData->data() + pos, actualLen);
-
-                readBytes = actualLen;
-                errorCode = 0;
-            }
-
-            // Add to cache
-            cache.put(entry, dngData);
-        }
-        catch(std::runtime_error& e) {
-            spdlog::error("Failed to generate DNG (error: {})", e.what());
-            cache.markLoadFailed(entry);
-        }
-
-        result(readBytes, errorCode);
-
-        return readBytes;
-    };
-
-
-    auto processFuture = mProcessingThreadPool.submit_task(generateTask);
-    if(!async)
-        return processFuture.get();
-
-    return 0;
+    return generateFrameHolder->generateFrame(entry, pos, len, dst, result, async);
 }
 
 size_t VirtualFileSystemImpl_MCRAW::generateAudio(
@@ -487,10 +477,10 @@ int VirtualFileSystemImpl_MCRAW::readFile(
     #endif
 
     // Requestion audio?
-    if(boost::ends_with(entry.name, "wav")) {
+    if(entry.name.ends_with("wav")) {
         return generateAudio(entry, pos, len, dst, result, async);
     }
-    else if(boost::ends_with(entry.name, "dng")) {
+    else if(entry.name.ends_with("dng")) {
         return generateFrame(entry, pos, len, dst, result, async);
     }
 

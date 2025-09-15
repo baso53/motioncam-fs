@@ -1,32 +1,53 @@
 #pragma once
 
-#include <IVirtualFileSystem.h>
 #include <IFuseFileSystem.h>
-
-namespace BS {
-class thread_pool;
-}
+#include "motioncam/Decoder.hpp"
 
 namespace motioncam {
 
-class Decoder;
-class LRUCache;
+inline const std::function<void(size_t, int)> EMPTY_CALLBACK =
+    [](size_t a, int b) {};
 
-class VirtualFileSystemImpl_MCRAW : public IVirtualFileSystem
+struct CacheEntry {
+    Entry entry;
+    std::shared_ptr<std::vector<char>> data;
+};
+
+class GenerateFrameHolder {
+public:
+GenerateFrameHolder(
+    const std::string& srcPath,
+    FileRenderOptions options,
+    float fps,
+    int draftScale);
+
+size_t generateFrame(
+    const Entry& entry,
+    const size_t pos,
+    const size_t len,
+    void* dst,
+    std::function<void(size_t, int)> result,
+    bool async);
+
+private:
+    const std::string          mSrcPath;
+    const FileRenderOptions    mOptions;
+    float                mFps;
+    int                  mDraftScale;
+
+    std::unique_ptr<Decoder>   sSharedDecoder;
+    std::deque<CacheEntry>     mCache;
+    static const size_t        MAX_CACHE_SIZE = 4;
+};
+
+class VirtualFileSystemImpl_MCRAW
 {
 public:
     VirtualFileSystemImpl_MCRAW(
-        BS::thread_pool& ioThreadPool,
-        BS::thread_pool& processingThreadPool,
-        LRUCache& lruCache,
-        FileRenderOptions options,
-        int draftScale,
         const std::string& file);
 
-    ~VirtualFileSystemImpl_MCRAW();
-
-    std::vector<Entry> listFiles(const std::string& filter = "") const override;
-    std::optional<Entry> findEntry(const std::string& fullPath) const override;
+    std::vector<Entry> listFiles(const std::string& filter = "") const;
+    std::optional<Entry> findEntry(const std::string& fullPath) const;
 
     int readFile(
         const Entry& entry,
@@ -34,9 +55,9 @@ public:
         const size_t len,
         void* dst,
         std::function<void(size_t, int)> result,
-        bool async=true) override;
+        bool async=true);
 
-    void updateOptions(FileRenderOptions options, int draftScale) override;
+    void updateOptions(FileRenderOptions options, int draftScale);
     
     FileInfo getFileInfo() const;
 
@@ -60,9 +81,6 @@ private:
         bool async);
 
 private:
-    LRUCache& mCache;
-    BS::thread_pool& mIoThreadPool;
-    BS::thread_pool& mProcessingThreadPool;
     const std::string mSrcPath;
     const std::string mBaseName;
     size_t mTypicalDngSize;
@@ -75,7 +93,7 @@ private:
     int mDroppedFrames;
     int mWidth;
     int mHeight;
-    std::mutex mMutex;
+    std::unique_ptr<motioncam::GenerateFrameHolder> generateFrameHolder;
 };
 
 } // namespace motioncam
