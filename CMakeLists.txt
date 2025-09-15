@@ -119,3 +119,22 @@ install(TARGETS ${PROJECT_NAME}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+# Add McrawMounterClient target (empty macOS app for embedding)
+add_executable(McrawMounterClient MACOSX_BUNDLE
+    src/macos/client/McrawMounterClient.swift
+)
+
+set_target_properties(McrawMounterClient PROPERTIES
+    # point at your custom Info.plist (which must include an NSExtension dictionary)
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/client/Info.plist"
+
+    XCODE_ATTRIBUTE_GENERATE_INFOPLIST_FILE YES
+    XCODE_ATTRIBUTE_SWIFT_VERSION 6
+    XCODE_ATTRIBUTE_SWIFT_DISABLE_SAFETY_CHECKS YES
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "baso53.motioncamfs"
+    XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL 3
+    XCODE_ATTRIBUTE_LLVM_LTO YES
+    XCODE_EMBED_EXTENSIONKIT_EXTENSIONS "${PROJECT_NAME}"
+)
