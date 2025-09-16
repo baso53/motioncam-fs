@@ -493,7 +493,6 @@ std::shared_ptr<std::vector<char>> generateDng(
     dng.SetBigEndian(false);
     dng.SetDNGVersion(1, 4, 0, 0);
     dng.SetDNGBackwardVersion(1, 1, 0, 0);
-    dng.SetImageData(reinterpret_cast<const unsigned char*>(processedData.data()), processedData.size());
     dng.SetImageWidth(width);
     dng.SetImageLength(height);
     dng.SetPlanarConfig(tinydngwriter::PLANARCONFIG_CONTIG);
@@ -596,10 +595,6 @@ std::shared_ptr<std::vector<char>> generateDng(
     // Write DNG
     std::string err;
 
-    tinydngwriter::DNGWriter writer(false);
-
-    writer.AddImage(&dng);
-
     // Save to memory
     auto output = std::make_shared<std::vector<char>>();
 
@@ -608,7 +603,7 @@ std::shared_ptr<std::vector<char>> generateDng(
 
     utils::vector_ostream stream(*output);
 
-    writer.WriteToFile(stream, &err);
+    dng.WriteToFile(stream, &err, reinterpret_cast<const unsigned char*>(processedData.data()), processedData.size());
 
     return output;
 }
