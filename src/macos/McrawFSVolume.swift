@@ -14,6 +14,8 @@ final class McrawFSVolume: FSVolume {
     private var rootFileSystem: MotioncamModule.motioncam.VirtualFileSystemImpl_MCRAW
 
     private let readQueue = DispatchQueue(label: "McrawFSVolume.readQueue", qos: .userInitiated)
+    
+    private let periodicTimer: DispatchSourceTimer
 
     init(resource: FSResource) {
         guard let resource = resource as? FSPathURLResource else {
@@ -36,11 +38,24 @@ final class McrawFSVolume: FSVolume {
         })
         
         root.attributes.linkCount = UInt32(root.children.count)
+        
+        periodicTimer = DispatchSource.makeTimerSource(queue: .global())
 
         super.init(
             volumeID: FSVolume.Identifier(uuid: UUID()),
             volumeName: FSFileName(string: fileName)
         )
+
+        periodicTimer.schedule(deadline: .now() + .seconds(10), repeating: .seconds(10), leeway: .seconds(2))
+        periodicTimer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.rootFileSystem.clearCache()
+        }
+        periodicTimer.resume()
+    }
+    
+    deinit {
+        periodicTimer.cancel()
     }
 }
 

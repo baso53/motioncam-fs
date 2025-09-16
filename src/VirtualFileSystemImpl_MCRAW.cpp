@@ -232,7 +232,7 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
     // Generate file entries
     int lastPts = 0;
 
-    mFiles.reserve(frames.size()*2);
+    mFiles.reserve(frames.size() + 1);
 
 // Disable icon previews in Windows/MacOS
 #ifdef _WIN32
@@ -329,7 +329,18 @@ GenerateFrameHolder::GenerateFrameHolder(
 , mFps(fps)
 , mDraftScale(draftScale)
 , sSharedDecoder(std::make_unique<Decoder>(srcPath))
-{}
+{
+    mLastAddToCacheTimestamp = std::chrono::system_clock::now();
+}
+
+void GenerateFrameHolder::clearCache() {
+    auto now = std::chrono::system_clock::now();
+    auto diff = std::chrono::duration_cast<std::chrono::seconds>(now - mLastAddToCacheTimestamp).count();
+
+    if (diff > 10) {
+        mCache.clear();
+    }
+}
 
 size_t GenerateFrameHolder::generateFrame(
     const Entry& entry,
@@ -410,6 +421,7 @@ size_t GenerateFrameHolder::generateFrame(
         if (mCache.size() > MAX_CACHE_SIZE) {
             mCache.pop_front();
         }
+        mLastAddToCacheTimestamp = std::chrono::system_clock::now();
     }
     catch(std::runtime_error& e) {
         // spdlog::error("Failed to generate DNG (error: {})", e.what());
@@ -434,6 +446,10 @@ size_t VirtualFileSystemImpl_MCRAW::generateFrame(
     bool async)
 {
     return generateFrameHolder->generateFrame(entry, pos, len, dst, result, async);
+}
+
+void VirtualFileSystemImpl_MCRAW::clearCache() {
+    generateFrameHolder->clearCache();
 }
 
 size_t VirtualFileSystemImpl_MCRAW::generateAudio(

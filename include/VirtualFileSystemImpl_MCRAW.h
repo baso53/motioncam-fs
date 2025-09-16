@@ -2,6 +2,7 @@
 
 #include <IFuseFileSystem.h>
 #include "motioncam/Decoder.hpp"
+#include <chrono>
 
 namespace motioncam {
 
@@ -28,6 +29,8 @@ size_t generateFrame(
     void* dst,
     std::function<void(size_t, int)> result,
     bool async);
+    
+void clearCache();
 
 private:
     const std::string          mSrcPath;
@@ -60,6 +63,8 @@ public:
     void updateOptions(FileRenderOptions options, int draftScale);
     
     FileInfo getFileInfo() const;
+    
+    void clearCache();
 
 private:
     void init(FileRenderOptions options);
