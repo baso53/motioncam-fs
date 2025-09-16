@@ -41,6 +41,7 @@ private:
     std::unique_ptr<Decoder>   sSharedDecoder;
     std::deque<CacheEntry>     mCache;
     static const size_t        MAX_CACHE_SIZE = 4;
+    std::chrono::system_clock::time_point mLastAddToCacheTimestamp;
 };
 
 class VirtualFileSystemImpl_MCRAW
