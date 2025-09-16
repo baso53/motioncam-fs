@@ -29,7 +29,7 @@ final class McrawFSVolume: FSVolume {
         let rootItem = McrawRootItem(name: FSFileName(string: fileName))
         root = rootItem
 
-        var i: UInt64 = 0
+        var i: UInt64 = 1
         rootFileSystem.listFiles("").forEach({ entry in
             rootItem.addItem(McrawFrame(entry: entry, fileId: i))
             i += 1
