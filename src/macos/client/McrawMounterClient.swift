@@ -220,7 +220,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func mountMyFS(fileUrl: URL, at mountPoint: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/sbin/mount")
-        process.arguments = ["-F", "-t", "mcrawfs3", fileUrl.path, mountPoint]
+        process.arguments = ["-F", "-t", "mcrawfs", fileUrl.path, mountPoint]
 
         let pipe = Pipe()
         process.standardOutput = pipe
