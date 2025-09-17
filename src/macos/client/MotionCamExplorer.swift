@@ -92,6 +92,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let resultsLock = NSLock()
         let group = DispatchGroup()
 
+        // throttle to 10 concurrent unmounts
+        let semaphore = DispatchSemaphore(value: 10)
+
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: container, isDirectory: &isDir), isDir.boolValue,
               let subdirs = try? fm.contentsOfDirectory(atPath: container)
@@ -103,8 +106,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for name in subdirs {
             let mp = container + "/" + name
             group.enter()
+            semaphore.wait()                  // <-- wait for an available “slot”
             DispatchQueue.global().async {
-                defer { group.leave() }
+                defer {
+                    semaphore.signal()        // <-- release slot
+                    group.leave()
+                }
 
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/sbin/umount")
@@ -291,6 +298,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let resultsLock = NSLock()
         let group = DispatchGroup()
 
+        // throttle to 10 concurrent mounts
+        let semaphore = DispatchSemaphore(value: 10)
+
         // 1) Gather .mcraw files
         let mcrawFiles: [URL]
         do {
@@ -326,11 +336,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             resultsLock.unlock()
         }
 
-        // 2) Launch each mount in parallel for the remaining files
+        // 2) Launch each mount in parallel for the remaining files, max 10 at once
         for file in mcrawFiles.dropFirst() {
             group.enter()
+            semaphore.wait()                    // <-- throttle
             DispatchQueue.global().async {
-                defer { group.leave() }
+                defer {
+                    semaphore.signal()          // <-- release
+                    group.leave()
+                }
+
                 do {
                     try self.mountSingleFile(at: file)
                     resultsLock.lock()
