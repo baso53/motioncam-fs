@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 @main
-struct McrawMounterClientApp: App {
+struct MotionCamExplorerApp: App {
     // flag to detect if we ever got an Open-File event
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
@@ -12,7 +12,7 @@ struct McrawMounterClientApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var didOpenFile = false
     // timeout for all external commands
-    private let commandTimeout: TimeInterval = 3
+    private let commandTimeout: TimeInterval = 5
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !didOpenFile {
@@ -21,14 +21,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard let first = urls.first else {
-            exit(EXIT_FAILURE)
-        }
+        guard let firstURL = urls.first else { return }
         didOpenFile = true
-        showMountOptionsAlert(for: first)
+        showMountOptionsAlert(for: firstURL)
     }
 
-    private func showUnmountOptionsAlert() -> Never {
+    private func showUnmountOptionsAlert() {
         let alert = NSAlert()
         alert.messageText = "No file was opened at launch."
         alert.informativeText = "Would you like to unmount all existing .mcraw mounts and remove /tmp/mcraws?"
@@ -38,12 +36,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             let results = unmountAllMcraws()
-            let failures = results.filter { $0.error != nil }
+            let failures = results.filter { entry in
+                guard let err = entry.error else { return false }
+                // If it’s a non‐zero exit and the output contains “not currently mounted”,
+                // don’t count it as a failure.
+                if let unErr = err as? UnmountError,
+                   case .nonZeroExit(_, let output) = unErr,
+                   output.contains("not currently mounted") {
+                    return false
+                }
+                return true
+            }
 
             if failures.isEmpty {
                 showAlertAndExit(
-                  message: "✅ Unmounted all \(results.count) mounts successfully.",
-                  exitCode: EXIT_SUCCESS
+                  message: "✅ Unmounted all \(results.count) mounts successfully."
                 )
             } else {
                 let maxLen = 1000
@@ -59,7 +66,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
         default:
-            exit(EXIT_SUCCESS)
+            exit(EXIT_FAILURE)
         }
     }
 
@@ -82,6 +89,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let container = "/tmp/mcraws"
         let fm = FileManager.default
         var results = [(mountPoint: String, error: Error?)]()
+        let resultsLock = NSLock()
+        let group = DispatchGroup()
 
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: container, isDirectory: &isDir), isDir.boolValue,
@@ -93,57 +102,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         for name in subdirs {
             let mp = container + "/" + name
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/sbin/umount")
-            proc.arguments = ["-f", mp]
+            group.enter()
+            DispatchQueue.global().async {
+                defer { group.leave() }
 
-            let outPipe = Pipe()
-            proc.standardOutput = outPipe
-            proc.standardError  = outPipe
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/sbin/umount")
+                proc.arguments = ["-f", mp]
 
-            var errorOccurred: Error?
-            do {
-                try proc.run()
-                // wait with timeout
-                let start = Date()
-                while proc.isRunning && Date().timeIntervalSince(start) < commandTimeout {
-                    Thread.sleep(forTimeInterval: 0.1)
+                let outPipe = Pipe()
+                proc.standardOutput = outPipe
+                proc.standardError  = outPipe
+
+                var errorOccurred: Error?
+                do {
+                    try proc.run()
+                    let start = Date()
+                    while proc.isRunning && Date().timeIntervalSince(start) < self.commandTimeout {
+                        Thread.sleep(forTimeInterval: 0.1)
+                    }
+                    if proc.isRunning {
+                        proc.terminate()
+                        proc.waitUntilExit()
+                        errorOccurred = UnmountError.timeout(timeout: self.commandTimeout)
+                    } else if proc.terminationStatus != 0 {
+                        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                        let str  = String(data: data, encoding: .utf8) ?? ""
+                        errorOccurred = UnmountError.nonZeroExit(status: proc.terminationStatus, output: str)
+                    }
+                } catch {
+                    errorOccurred = error
                 }
-                if proc.isRunning {
-                    proc.terminate()
-                    proc.waitUntilExit()
-                    errorOccurred = UnmountError.timeout(timeout: commandTimeout)
-                } else if proc.terminationStatus != 0 {
-                    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-                    let str  = String(data: data, encoding: .utf8) ?? ""
-                    errorOccurred = UnmountError.nonZeroExit(status: proc.terminationStatus, output: str)
-                }
-            } catch {
-                errorOccurred = error
+
+                resultsLock.lock()
+                results.append((mountPoint: mp, error: errorOccurred))
+                resultsLock.unlock()
             }
-
-            results.append((mountPoint: mp, error: errorOccurred))
         }
+
+        group.wait()
 
         // Finally remove the container folder
         do {
             try fm.removeItem(atPath: container)
         } catch {
-            // treat container‐remove as an overall error, if desired:
             results.append((mountPoint: container, error: error))
         }
 
         return results
     }
 
-    private func showAlertAndExit(message: String, exitCode: Int32 = EXIT_FAILURE) -> Never {
+    private func showAlertAndExit(message: String) -> Never {
         let alert = NSAlert()
         alert.messageText = message
         alert.addButton(withTitle: "OK")
         _ = alert.runModal()
-        exit(exitCode)
+        exit(EXIT_FAILURE)
     }
 
+    private func handleDisabledError(_ mountError: MountError) {
+        if case .nonZeroExit(_, let output) = mountError,
+           output.contains("is disabled") {
+            let disableAlert = NSAlert()
+            disableAlert.messageText = "Please enable the MotionCamFuse filesystem and try again."
+            disableAlert.addButton(withTitle: "OK")
+            _ = disableAlert.runModal()
+            NSWorkspace.shared.open(
+              URL(string:
+                "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.fskit.fsmodule"
+              )!
+            )
+            exit(EXIT_FAILURE)
+        }
+    }
 
     private func showMountOptionsAlert(for fileURL: URL) {
         let alert = NSAlert()
@@ -156,8 +187,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .alertFirstButtonReturn:
             do {
                 try mountSingleFile(at: fileURL)
-                showAlertAndExit(message: "✅ \(fileURL.lastPathComponent) mounted successfully.", exitCode: EXIT_SUCCESS)
+                showAlertAndExit(message: "✅ \(fileURL.lastPathComponent) mounted successfully.")
             } catch {
+                if let mountError = error as? MountError {
+                    handleDisabledError(mountError)
+                }
                 showAlertAndExit(message: "❌ \(error)")
             }
 
@@ -165,7 +199,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             mountAllFiles(in: fileURL.deletingLastPathComponent())
 
         default:
-            NSApp.terminate(nil)
+            exit(EXIT_FAILURE)
         }
     }
 
@@ -254,6 +288,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func mountAllFiles(in folderURL: URL) {
         let fm = FileManager.default
         var results = [(file: URL, error: Error?)]()
+        let resultsLock = NSLock()
+        let group = DispatchGroup()
 
         // 1) Gather .mcraw files
         let mcrawFiles: [URL]
@@ -275,23 +311,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             showAlertAndExit(message: "⚠️ No .mcraw files found in \(folderURL.path)")
         }
 
-        // 2) Try each mount, collect errors
-        for file in mcrawFiles {
-            do {
-                try mountSingleFile(at: file)
-                results.append((file, nil))
-            } catch {
-                results.append((file, error))
+        // 1a) Mount the first file to catch a disabled‐fs error early
+        do {
+            try mountSingleFile(at: mcrawFiles[0])
+            resultsLock.lock()
+            results.append((mcrawFiles[0], nil))
+            resultsLock.unlock()
+        } catch {
+            if let mountError = error as? MountError {
+                handleDisabledError(mountError)
+            }
+            resultsLock.lock()
+            results.append((mcrawFiles[0], error))
+            resultsLock.unlock()
+        }
+
+        // 2) Launch each mount in parallel for the remaining files
+        for file in mcrawFiles.dropFirst() {
+            group.enter()
+            DispatchQueue.global().async {
+                defer { group.leave() }
+                do {
+                    try self.mountSingleFile(at: file)
+                    resultsLock.lock()
+                    results.append((file, nil))
+                    resultsLock.unlock()
+                } catch {
+                    resultsLock.lock()
+                    results.append((file, error))
+                    resultsLock.unlock()
+                }
             }
         }
 
-        // 3) Summarize
+        group.wait()
+
+        // 3) Summarize on the main thread
         let failures = results.filter { $0.error != nil }
         if failures.isEmpty {
-            showAlertAndExit(message: "✅ All \(results.count) images mounted successfully.", exitCode: EXIT_SUCCESS)
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/mcraws"))
+            showAlertAndExit(message: "✅ All \(results.count) images mounted successfully.")
         } else {
+            let mountedSuccessfully = results.count - failures.count
+            if mountedSuccessfully > 0 {
+                NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/mcraws"))
+            }
             let maxLen = 1000
-            var msg = "Mounted \(results.count-failures.count)/\(results.count) successfully.\n\nFailures:\n"
+            var msg = "Mounted \(mountedSuccessfully)/\(results.count) successfully.\n\nFailures:\n"
             for (file, err) in failures {
                 let entry = "\(file.lastPathComponent): \(err!)\n"
                 if msg.count + entry.count > maxLen {

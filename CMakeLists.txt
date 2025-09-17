@@ -123,12 +123,12 @@ install(TARGETS ${PROJECT_NAME}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-# Add McrawMounterClient target (empty macOS app for embedding)
-add_executable(McrawMounterClient MACOSX_BUNDLE
-    src/macos/client/McrawMounterClient.swift
+# Add MotionCamExplorer target (empty macOS app for embedding)
+add_executable(MotionCamExplorer MACOSX_BUNDLE
+    src/macos/client/MotionCamExplorer.swift
 )
 
-set_target_properties(McrawMounterClient PROPERTIES
+set_target_properties(MotionCamExplorer PROPERTIES
     # point at your custom Info.plist (which must include an NSExtension dictionary)
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/client/Info.plist"

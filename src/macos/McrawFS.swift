@@ -2,6 +2,10 @@ import Foundation
 import FSKit
 import os
 
+enum CustomFSKitError: Error {
+    case nonZeroExit(status: Int32)
+}
+
 final class McrawFS: FSUnaryFileSystem, FSUnaryFileSystemOperations {
     
     private let logger = Logger(subsystem: "McrawMounter", category: "McrawFS")
@@ -11,7 +15,8 @@ final class McrawFS: FSUnaryFileSystem, FSUnaryFileSystemOperations {
         replyHandler: @escaping (FSProbeResult?, (any Error)?) -> Void
     ) {
         guard let resource = resource as? FSPathURLResource else {
-            exit(EXIT_FAILURE)
+            replyHandler(FSProbeResult.notRecognized, CustomFSKitError.nonZeroExit(status: 1))
+            return
         }
         
         let fileName = resource.url.deletingPathExtension().lastPathComponent
@@ -31,11 +36,15 @@ final class McrawFS: FSUnaryFileSystem, FSUnaryFileSystemOperations {
         replyHandler: @escaping (FSVolume?, (any Error)?) -> Void
     ) {
         guard let resource = resource as? FSPathURLResource else {
-            exit(EXIT_FAILURE)
+            replyHandler(nil, CustomFSKitError.nonZeroExit(status: 2))
+            return
         }
 
         let ok = resource.url.startAccessingSecurityScopedResource()
-        guard ok else { exit(EXIT_FAILURE) }
+        guard ok else {
+            replyHandler(nil, CustomFSKitError.nonZeroExit(status: 3))
+            return
+        }
 
         containerStatus = .ready
         let volume = McrawFSVolume(resource: resource)
@@ -51,7 +60,8 @@ final class McrawFS: FSUnaryFileSystem, FSUnaryFileSystemOperations {
         replyHandler reply: @escaping ((any Error)?) -> Void
     ) {
         guard let resource = resource as? FSPathURLResource else {
-            exit(EXIT_FAILURE)
+            reply(CustomFSKitError.nonZeroExit(status: 4))
+            return
         }
 
         resource.url.stopAccessingSecurityScopedResource()

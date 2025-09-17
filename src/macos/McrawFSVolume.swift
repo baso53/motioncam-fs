@@ -5,7 +5,7 @@ import MotioncamModule
 
 final class McrawFSVolume: FSVolume {
     
-    private let resource: FSResource
+    private let resource: FSPathURLResource
 
     private let logger = Logger(subsystem: "McrawMounter", category: "McrawFSVolume")
 
@@ -17,11 +17,7 @@ final class McrawFSVolume: FSVolume {
     
     private let periodicTimer: DispatchSourceTimer
 
-    init(resource: FSResource) {
-        guard let resource = resource as? FSPathURLResource else {
-            exit(EXIT_FAILURE)
-        }
-
+    init(resource: FSPathURLResource) {
         let fileName = resource.url.deletingPathExtension().lastPathComponent
 
         let filePath = std.string(resource.url.path)
