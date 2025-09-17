@@ -1,7 +1,7 @@
 # MotionCam-FS (FSKit Edition)
 
 A macOS **FSKit** file-system extension that lets you treat native MotionCam **`.mcraw`** files like ordinary disk images.  
-Mount any `.mcraw` with a single command, browse its full-resolution DNG frames in Finder, and work with them in your favorite editor—no conversion step required.
+Mount any `.mcraw` with a single CLI command—or double-click it through the **MotionCamExplorer** GUI—browse its full-resolution DNG frames in Finder, and work with them in your favorite editor—no conversion step required.
 
 ```
 mount -F -t mcrawfs /path/to/video.mcraw /Volumes/MotionCam
@@ -15,7 +15,7 @@ mount -F -t mcrawfs /path/to/video.mcraw /Volumes/MotionCam
 3. 🏗️ Building from Source  
 4. 📦 Installing the Extension  
 5. 🚀 Usage  
-6. 👩‍💻 Graphical Companion App  
+6. 🖥️ MotionCamExplorer GUI  
 7. 🛠️ Troubleshooting  
 8. 🤝 Contributing  
 9. 📄 License
@@ -26,7 +26,7 @@ mount -F -t mcrawfs /path/to/video.mcraw /Volumes/MotionCam
 * **Native FSKit module** – written against Apple’s new `FSPathURLResource` API (macOS 26+).  
 * **Read-only, zero-copy access** to individual DNG frames inside a `.mcraw`.  
 * **FUSE-like workflow** but without third-party kernel components—pure user-space.  
-* **Command-line or GUI** (via [McrawMounterClient](https://github.com/baso53/McrawMounterClient)).  
+* **Command-line or GUI** (via [MotionCamExplorer](https://github.com/baso53/MotionCamExplorer)).  
 * Automatic detection of frame rate, resolution and bit-depth metadata.
 
 ---
@@ -85,7 +85,7 @@ The resulting `.appex` is your extension.
 # Mount a .mcraw
 sudo mount -F -t mcrawfs \
     /Users/alice/Videos/007-VIDEO_24mm-240328_141729.0.mcraw \
-    /Volumes/007-VIDEO_24mm-240328_141729.0.mcraw
+    /tmp/007-VIDEO_24mm-240328_141729.0.mcraw
 
 # Work with the files
 open /Volumes/007-VIDEO_24mm-240328_141729.0.mcraw/frame_00042.dng
@@ -101,9 +101,16 @@ Tips
 
 ---
 
-## 6. 👩‍💻 Graphical Companion App
+## 6. 🖥️ MotionCamExplorer GUI
 
-Prefer point-and-click? [**McrawMounterClient**](https://github.com/baso53/McrawMounterClient).  
+Prefer point-and-click? Grab the latest build of **MotionCamExplorer** from GitHub  
+➡️ [Releases](https://github.com/baso53/MotionCamExplorer/releases).
+
+1. Download the `.dmg` from the Releases page.  
+2. Double-click to open it.  
+3. Drag **MotionCamExplorer.app** into **Applications**.  
+4. Launch **MotionCamExplorer** and simply open any `.mcraw` file—mounting happens automatically.
+5. Open the **MotionCamExplorer** by itself to unmount all the mounted files.
 
 ---
 
