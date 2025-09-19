@@ -70,23 +70,18 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE _FILE_OFFSET_BITS=64 FUSE_USE
 #     )
 # endif()
 
-# Add motioncam decoder as static library
-add_library(motioncam-decoder STATIC
+# Instead, compile the decoder sources right into the fuse target:
+target_sources(${PROJECT_NAME} PRIVATE
     ${DEPENDENCIES_PATH}/motioncam-decoder/lib/Decoder.cpp
     ${DEPENDENCIES_PATH}/motioncam-decoder/lib/RawData.cpp
-    ${DEPENDENCIES_PATH}/motioncam-decoder/lib/RawData_Legacy.cpp)
-
-target_include_directories(motioncam-decoder
-    PUBLIC
+    ${DEPENDENCIES_PATH}/motioncam-decoder/lib/RawData_Legacy.cpp
+)
+target_include_directories(${PROJECT_NAME} PRIVATE
     ${DEPENDENCIES_PATH}/bw64/include
     ${DEPENDENCIES_PATH}/motioncam-decoder/thirdparty
     ${DEPENDENCIES_PATH}/motioncam-decoder/lib/include
 )
-
-target_link_libraries(${PROJECT_NAME} PRIVATE
-  motioncam-decoder
-  ${platform-specific})
-
+target_link_libraries(${PROJECT_NAME} PRIVATE ${platform-specific})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
     BUNDLE_EXTENSION "appex"
@@ -110,6 +105,9 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME YES
     XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--timestamp"
     XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS NO
+    XCODE_ATTRIBUTE_DEAD_CODE_STRIPPING YES
+    XCODE_ATTRIBUTE_ENABLE_APP_SANDBOX YES
+    XCODE_ATTRIBUTE_GCC_INLINES_ARE_PRIVATE_EXTERN YES
 )
 
 set_source_files_properties(${MACOS_BUNDLE_ICON_FILE} PROPERTIES
