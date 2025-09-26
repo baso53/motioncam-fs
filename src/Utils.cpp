@@ -273,10 +273,8 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short> 
     uint32_t newWidth  = (inOutWidth  / scale) & ~3u;
     uint32_t newHeight = (inOutHeight / scale) & ~3u;
     
-    const auto& srcBlackLevel = metadata.dynamicBlackLevel[0] > 0.f
-    ? metadata.dynamicBlackLevel    : cameraConfiguration.blackLevel;
-    const auto  srcWhiteLevel = metadata.dynamicWhiteLevel > 0.f
-    ? metadata.dynamicWhiteLevel    : cameraConfiguration.whiteLevel;
+    const auto& srcBlackLevel = cameraConfiguration.blackLevel;
+    const auto  srcWhiteLevel = cameraConfiguration.whiteLevel;
     
     const std::array<float,4> linear = {
         1.f / (srcWhiteLevel - srcBlackLevel[0]),
