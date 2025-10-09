@@ -288,7 +288,7 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
             // Add main entry
             entry.type = EntryType::FILE_ENTRY;
             entry.size = mTypicalDngSize;
-            entry.name = constructFrameFilename("frame-", lastPts, 6, "dng");
+            entry.name = constructFrameFilename(mBaseName + "-", lastPts, 7, "dng");
             entry.userData = x;
 
             mFiles.emplace_back(entry);

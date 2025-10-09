@@ -12,7 +12,7 @@ struct MotionCamExplorerApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var didOpenFile = false
     // timeout for all external commands
-    private let commandTimeout: TimeInterval = 5
+    private let commandTimeout: TimeInterval = 15
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !didOpenFile {
