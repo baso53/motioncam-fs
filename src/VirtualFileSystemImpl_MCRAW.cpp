@@ -199,7 +199,7 @@ IconSize=16
 
 VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(const std::string& file) :
         mSrcPath(file),
-        mBaseName("ascascascascasc"),
+        mBaseName(extractFilenameWithoutExtension(file)),
         mTypicalDngSize(0),
         mFps(0),
         mMedFps(0),
@@ -210,7 +210,14 @@ VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(const std::string& file
         mWidth(0),
         mHeight(0),
         mDraftScale(0),
-        mOptions(FileRenderOptions::RENDER_OPT_NONE) {
+        mOptions(FileRenderOptions::RENDER_OPT_NONE),
+        mCFRTarget(CFRMode::PreferDropFrame),
+        mCropTarget(""),
+        mCameraModel(""),
+        mLevels(""),
+        mLogTransform(LogTransformMode::Disabled),
+        mExposureCompensation(""),
+        mQuadBayerOption(QuadBayerMode::Remosaic) {
 
     init(FileRenderOptions::RENDER_OPT_NONE);
 }
@@ -326,9 +333,9 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
     mHeight = cameraFrameMetadata.height;
     mTotalFrames = static_cast<int>(frames.size());
     mDroppedFrames = 0; // Will be calculated during frame processing
-    mDuplicatedFrames = 0;	
+    mDuplicatedFrames = 0;
 
-    RenderSettings settingsForInit(
+      RenderSettings settings(
         options,
         mDraftScale,
         mCFRTarget,
@@ -346,8 +353,8 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
         cameraConfig,
         mFps,
         0,
-        0, // FIX
-        settingsForInit
+        0.0,  // baselineExpValue - using 0.0 as default
+        settings
     );
 
     mTypicalDngSize = dngData->size();
@@ -537,10 +544,10 @@ size_t GenerateFrameHolder::generateFrame(
     auto [frameIndex, containerMetadata, frameMetadata, frameData] = std::move(decodedFrame);
 
     // spdlog::debug("Generating {}", entry.name);
-    
+
     RenderSettings settings(
-        FileRenderOptions::RENDER_OPT_NONE,
-        0,
+        mOptions,
+        mDraftScale,
         CFRTarget(CFRMode::PreferDropFrame),
         "",
         "",
@@ -556,9 +563,9 @@ size_t GenerateFrameHolder::generateFrame(
             frameMetadata,
             containerMetadata,
             mFps,
-            mOptions,
-            0, // FIX
-            settings); // FIX
+            frameIndex,
+            0.0,  // baselineExpValue - using 0.0 as default
+            settings);
 
         if(dngData && pos < dngData->size()) {
             const size_t actualLen = std::min(len, dngData->size() - pos);
