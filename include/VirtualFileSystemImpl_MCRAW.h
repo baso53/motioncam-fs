@@ -61,7 +61,7 @@ public:
         std::function<void(size_t, int)> result,
         bool async=true);
 
-    void updateOptions(FileRenderOptions options, int draftScale);
+    void updateOptions(const RenderSettings& settings);
     
     FileInfo getFileInfo() const;
     
@@ -93,10 +93,20 @@ private:
     std::vector<Entry> mFiles;
     std::vector<uint8_t> mAudioFile;
     int mDraftScale;
+    CFRTarget mCFRTarget;
+    std::string mCropTarget;
+    std::string mCameraModel;
+    std::string mLevels;
+    LogTransformMode mLogTransform;
+    std::string mExposureCompensation;
+    QuadBayerMode mQuadBayerOption;
     FileRenderOptions mOptions;
     float mFps;
+    float mMedFps;
+    float mAvgFps;
     int mTotalFrames;
     int mDroppedFrames;
+    int mDuplicatedFrames;
     int mWidth;
     int mHeight;
     std::unique_ptr<motioncam::GenerateFrameHolder> generateFrameHolder;

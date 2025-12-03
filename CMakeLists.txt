@@ -142,3 +142,34 @@ set_target_properties(MotionCamExplorer PROPERTIES
     XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--timestamp"
     XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS NO
 )
+if(QT_VERSION_MAJOR EQUAL 6)
+    qt_finalize_executable(${PROJECT_NAME})
+    
+    # Deploy Qt dependencies using Qt's deployment tool
+    if(WIN32)
+        # Get Qt installation directory
+        get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+        get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
+        
+        # Use windeployqt to copy all required Qt dependencies
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND "${QT_BIN_DIR}/windeployqt.exe"
+                --debug
+                --no-translations
+                --no-system-d3d-compiler
+                --no-opengl-sw
+                --no-compiler-runtime
+                --verbose 2
+                $<TARGET_FILE:${PROJECT_NAME}>
+        )
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND "${QT_BIN_DIR}/windeployqt.exe"
+                --no-translations
+                --no-system-d3d-compiler
+                --no-opengl-sw
+                --no-compiler-runtime
+                --verbose 2
+                $<TARGET_FILE:${PROJECT_NAME}>
+        )       # add both release and debug qt dlls because im lazy
+    endif()
+endif()

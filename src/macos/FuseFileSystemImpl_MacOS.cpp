@@ -89,7 +89,8 @@ public:
     Session(const std::string& srcFile, const std::string& dstPath, VirtualFileSystemImpl_MCRAW* fs);
     ~Session();
 
-    void updateOptions(FileRenderOptions options, int draftScale);
+    void updateOptions(const RenderSettings& settings);
+
     FileInfo getFileInfo() const;
 
 private:
@@ -206,11 +207,11 @@ void Session::init(VirtualFileSystemImpl_MCRAW* fs) {
 
 }
 
-void Session::updateOptions(FileRenderOptions options, int draftScale) {
-    mFs->updateOptions(options, draftScale);
+void Session::updateOptions(const RenderSettings& settings)
+{
+    mFs->updateOptions(settings);
 
     fuse_invalidate_path(mFuse, mDstPath.c_str());
-
 }
 
 FileInfo Session::getFileInfo() const {
@@ -387,7 +388,9 @@ FuseFileSystemImpl_MacOs::~FuseFileSystemImpl_MacOs() {
 }
 
 MountId FuseFileSystemImpl_MacOs::mount(
-    FileRenderOptions options, int draftScale, const std::string& srcFile, const std::string& dstPath)
+    const RenderSettings& settings,
+    const std::string& srcFile,
+    const std::string& dstPath)
 {
     fs::path srcPath(srcFile);
     std::string extension = srcPath.extension().string();
@@ -413,14 +416,19 @@ MountId FuseFileSystemImpl_MacOs::mount(
         size_t stack_size = 0;
 
         try {
+            // Extract base name from destination path
+            fs::path dstPathObj(dstPath);
+            std::string baseName = dstPathObj.filename().string();
+
             auto* fs =
                 new VirtualFileSystemImpl_MCRAW(
                     *mIoThreadPool,
                     *mProcessingThreadPool,
                     *mCache,
-                    options,
-                    draftScale,
-                    srcFile);
+                    settings,
+                    srcFile,
+                    baseName
+                );
 
             auto session = std::make_unique<Session>(srcFile, dstPath, fs);
 
@@ -453,10 +461,13 @@ void FuseFileSystemImpl_MacOs::unmount(MountId mountId) {
     }
 }
 
-void FuseFileSystemImpl_MacOs::updateOptions(MountId mountId, FileRenderOptions options, int draftScale) {
+void FuseFileSystemImpl_MacOs::updateOptions(
+    MountId mountId,
+    const RenderSettings& settings)
+{
     auto it = mMountedFiles.find(mountId);
     if(it != mMountedFiles.end()) {
-        it->second->updateOptions(options, draftScale);
+        it->second->updateOptions(settings);
     }
 }
 

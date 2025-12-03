@@ -83,7 +83,7 @@ public:
     ~Session();
 
 public:
-    void updateOptions(FileRenderOptions options, int draftScale);
+    void updateOptions(const RenderSettings& settings);
     FileInfo getFileInfo() const;
 
 protected:
@@ -159,12 +159,10 @@ Session::~Session() {
     Stop();
 }
 
-void Session::updateOptions(FileRenderOptions options, int draftScale) {
-    mOptions = options;
-    mDraftScale = draftScale;
-
-    // Tell file system about new options
-    mFs->updateOptions(options, draftScale);
+void Session::updateOptions(const RenderSettings& settings) {
+    mOptions = settings.options;
+    mDraftScale = settings.draftScale;
+    mFs->updateOptions(settings);
 
     // We need to clear out the cache
     auto files = mFs->listFiles();
@@ -190,7 +188,7 @@ void Session::updateOptions(FileRenderOptions options, int draftScale) {
         if(boost::ends_with(e.name, "dng")) {
             PRJ_PLACEHOLDER_INFO placeholderInfo = {};
 
-            updatePlaceHolder(placeholderInfo, e, options, draftScale);
+            updatePlaceHolder(placeholderInfo, e, settings.options, settings.draftScale);
 
             hr = PrjUpdateFileIfNeeded(
                 _instanceHandle,
@@ -538,7 +536,7 @@ void setupLogging() {
     }
 }
 
-} // namespace
+} // namespace motioncam
 
 FuseFileSystemImpl_Win::FuseFileSystemImpl_Win() :
     mNextMountId(0),
@@ -549,7 +547,7 @@ FuseFileSystemImpl_Win::FuseFileSystemImpl_Win() :
     setupLogging();
 }
 
-MountId FuseFileSystemImpl_Win::mount(FileRenderOptions options, int draftScale, const std::string& srcFile, const std::string& dstPath) {
+MountId FuseFileSystemImpl_Win::mount(const RenderSettings& settings, const std::string& srcFile, const std::string& dstPath) {
     fs::path srcPath(srcFile);
     std::string extension = srcPath.extension().string();
 
@@ -559,21 +557,19 @@ MountId FuseFileSystemImpl_Win::mount(FileRenderOptions options, int draftScale,
         auto mountId = mNextMountId++;
 
         try {
-            auto fs = std::make_unique<VirtualFileSystemImpl_MCRAW>(*mIoThreadPool, *mProcessingThreadPool, *mCache, options, draftScale, srcFile);
-
+            // Extract base name from destination path
+            fs::path dstPathObj(dstPath);
+            std::string baseName = dstPathObj.filename().string();
+            auto fs = std::make_unique<VirtualFileSystemImpl_MCRAW>(*mIoThreadPool, *mProcessingThreadPool, *mCache, settings, srcFile, baseName);
             mMountedFiles[mountId] = std::make_unique<Session>(dstPath, std::move(fs));
         }
         catch(std::runtime_error& e) {
             spdlog::error("Failed to mount {} to {} (error: {})", srcFile, dstPath, e.what());
-
             throw std::runtime_error(e.what());
         }
-
         return mountId;
     }
-
     spdlog::error("Failed to mount {} to {}, invalid file format", srcFile, dstPath);
-
     throw std::runtime_error("Invalid format");
 }
 
@@ -581,13 +577,11 @@ void FuseFileSystemImpl_Win::unmount(MountId mountId) {
     mMountedFiles.erase(mountId);
 }
 
-void FuseFileSystemImpl_Win::updateOptions(MountId mountId, FileRenderOptions options, int draftScale) {
+void FuseFileSystemImpl_Win::updateOptions(MountId mountId, const RenderSettings& settings) {
     auto it = mMountedFiles.find(mountId);
     if(it == mMountedFiles.end())
         return;
-
-    dynamic_cast<Session*>(mMountedFiles[mountId].get())->updateOptions(
-        options, draftScale);
+    dynamic_cast<Session*>(mMountedFiles[mountId].get())->updateOptions(settings);
 }
 
 std::optional<FileInfo> FuseFileSystemImpl_Win::getFileInfo(MountId mountId) {
@@ -598,4 +592,4 @@ std::optional<FileInfo> FuseFileSystemImpl_Win::getFileInfo(MountId mountId) {
     return std::nullopt;
 }
 
-} // namespace motioncam
+}
