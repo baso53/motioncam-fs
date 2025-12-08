@@ -333,9 +333,9 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
     mHeight = cameraFrameMetadata.height;
     mTotalFrames = static_cast<int>(frames.size());
     mDroppedFrames = 0; // Will be calculated during frame processing
-    mDuplicatedFrames = 0;
+    mDuplicatedFrames = 0;	
 
-      RenderSettings settings(
+    RenderSettings settingsForInit(
         options,
         mDraftScale,
         mCFRTarget,
@@ -353,8 +353,8 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
         cameraConfig,
         mFps,
         0,
-        0.0,  // baselineExpValue - using 0.0 as default
-        settings
+        0,
+        settingsForInit
     );
 
     mTypicalDngSize = dngData->size();
@@ -362,7 +362,7 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
     // Generate file entries
     int lastPts = 0;
 
-    mFiles.reserve(frames.size() + 1);
+    mFiles.reserve(frames.size()*2);
 
 // Disable icon previews in Windows/MacOS
 #ifdef _WIN32

@@ -458,108 +458,108 @@ void encodeTo2Bit(
 }
 
 
-//tinydngwriter::OpcodeList createLensShadingOpcodeList(
-//    const CameraFrameMetadata& metadata,
-//    uint32_t imageWidth,
-//    uint32_t imageHeight,
-//    int left = 0,
-//    int top = 0)
-//{
-//    tinydngwriter::OpcodeList opcodeList;
-//    
-//    if (metadata.lensShadingMap.empty() || 
-//        metadata.lensShadingMapWidth <= 0 || 
-//        metadata.lensShadingMapHeight <= 0) {
-//        return opcodeList; // Return empty list if no shading map
-//    }
-//    
-//    // Build a gain map opcode compatible with DNG OpcodeList2 GainMap
-//    tinydngwriter::GainMapParams gainParams;
-//    
-//    // Set the area to apply the gain map (active image area)
-//    // Use provided left/top offsets if the active area is a sub-rectangle
-//    gainParams.top = static_cast<unsigned int>(std::max(0, top));
-//    gainParams.left = static_cast<unsigned int>(std::max(0, left));
-//    gainParams.bottom = static_cast<unsigned int>(std::max<int>(0, top) + imageHeight);
-//    gainParams.right = static_cast<unsigned int>(std::max<int>(0, left) + imageWidth);
-//    
-//    // Apply starting from plane 0
-//    gainParams.plane = 0;
-//    // Determine number of planes available in the shading map (expect 4 for Bayer)
-//    unsigned int availablePlanes = static_cast<unsigned int>(metadata.lensShadingMap.size());
-//    if (availablePlanes == 0) availablePlanes = 1;
-//    if (availablePlanes >= 4) {
-//        gainParams.planes = 4;
-//    } else if (availablePlanes >= 3) {
-//        gainParams.planes = 3;
-//    } else {
-//        gainParams.planes = 1;
-//    }
-//    
-//    // Grid size in the gain map
-//    const unsigned int mapPointsV = static_cast<unsigned int>(metadata.lensShadingMapHeight);
-//    const unsigned int mapPointsH = static_cast<unsigned int>(metadata.lensShadingMapWidth);
-//    gainParams.map_points_v = mapPointsV;
-//    gainParams.map_points_h = mapPointsH;
-//    
-//    // Compute pixel pitch between adjacent map points in rows/cols (in pixels)
-//    // If only a single point along a dimension, pitch covers the full extent
-//    const unsigned int imageRows = imageHeight;
-//    const unsigned int imageCols = imageWidth;
-//    unsigned int rowPitch = (mapPointsV > 1)
-//        ? static_cast<unsigned int>(std::max(1u, (imageRows - 1) / (mapPointsV - 1)))
-//        : imageRows;
-//    unsigned int colPitch = (mapPointsH > 1)
-//        ? static_cast<unsigned int>(std::max(1u, (imageCols - 1) / (mapPointsH - 1)))
-//        : imageCols;
-//    gainParams.row_pitch = rowPitch;
-//    gainParams.col_pitch = colPitch;
-//    
-//    // Map spacing and origin in relative coordinates
-//    // Spacing is relative pitch to image size; origin is relative to active area
-//    gainParams.map_spacing_v = (imageRows > 0) ? static_cast<double>(rowPitch) / static_cast<double>(imageRows) : 0.0;
-//    gainParams.map_spacing_h = (imageCols > 0) ? static_cast<double>(colPitch) / static_cast<double>(imageCols) : 0.0;
-//    gainParams.map_origin_v = (imageRows > 0) ? static_cast<double>(std::max(0, top)) / static_cast<double>(imageRows) : 0.0;
-//    gainParams.map_origin_h = (imageCols > 0) ? static_cast<double>(std::max(0, left)) / static_cast<double>(imageCols) : 0.0;
-//    
-//    // Number of planes in the gain map payload (match planes when available)
-//    gainParams.map_planes = gainParams.planes;
-//    
-//    // Fill gain data in plane-major, row-major order
-//    if (!metadata.lensShadingMap.empty() && !metadata.lensShadingMap[0].empty()) {
-//        const size_t perPlaneSize = static_cast<size_t>(mapPointsV) * static_cast<size_t>(mapPointsH);
-//        const size_t expectedSize = perPlaneSize * static_cast<size_t>(gainParams.map_planes);
-//        gainParams.gain_data.reserve(expectedSize);
-//
-//        for (unsigned int p = 0; p < gainParams.map_planes; ++p) {
-//            const unsigned int srcPlane = (p < metadata.lensShadingMap.size()) ? p : 0;
-//            for (unsigned int v = 0; v < mapPointsV; ++v) {
-//                for (unsigned int h = 0; h < mapPointsH; ++h) {
-//                    const size_t index = static_cast<size_t>(v) * mapPointsH + h;
-//                    float gain = 1.0f;
-//                    if (index < metadata.lensShadingMap[srcPlane].size()) {
-//                        gain = metadata.lensShadingMap[srcPlane][index];
-//                        if (!std::isfinite(gain) || gain <= 0.0f) {
-//                            gain = 1.0f;
-//                        } else if (gain > 16.0f) {
-//                            gain = 16.0f; // broader but safe upper bound
-//                        }
-//                    }
-//                    gainParams.gain_data.push_back(gain);
-//                }
-//            }
-//        }
-//
-//        // Only add the gain map if we have valid data size
-//        if (gainParams.gain_data.size() == expectedSize) {
-//            opcodeList.AddGainMap(gainParams);
-//        }
-//    }
-//    
-//    return opcodeList;
-//}
+tinydngwriter::OpcodeList createLensShadingOpcodeList(
+    const CameraFrameMetadata& metadata,
+    uint32_t imageWidth,
+    uint32_t imageHeight,
+    int left = 0,
+    int top = 0)
+{
+    tinydngwriter::OpcodeList opcodeList;
+    
+    if (metadata.lensShadingMap.empty() || 
+        metadata.lensShadingMapWidth <= 0 || 
+        metadata.lensShadingMapHeight <= 0) {
+        return opcodeList; // Return empty list if no shading map
+    }
+    
+    // Build a gain map opcode compatible with DNG OpcodeList2 GainMap
+    tinydngwriter::GainMapParams gainParams;
+    
+    // Set the area to apply the gain map (active image area)
+    // Use provided left/top offsets if the active area is a sub-rectangle
+    gainParams.top = static_cast<unsigned int>(std::max(0, top));
+    gainParams.left = static_cast<unsigned int>(std::max(0, left));
+    gainParams.bottom = static_cast<unsigned int>(std::max<int>(0, top) + imageHeight);
+    gainParams.right = static_cast<unsigned int>(std::max<int>(0, left) + imageWidth);
+    
+    // Apply starting from plane 0
+    gainParams.plane = 0;
+    // Determine number of planes available in the shading map (expect 4 for Bayer)
+    unsigned int availablePlanes = static_cast<unsigned int>(metadata.lensShadingMap.size());
+    if (availablePlanes == 0) availablePlanes = 1;
+    if (availablePlanes >= 4) {
+        gainParams.planes = 4;
+    } else if (availablePlanes >= 3) {
+        gainParams.planes = 3;
+    } else {
+        gainParams.planes = 1;
+    }
+    
+    // Grid size in the gain map
+    const unsigned int mapPointsV = static_cast<unsigned int>(metadata.lensShadingMapHeight);
+    const unsigned int mapPointsH = static_cast<unsigned int>(metadata.lensShadingMapWidth);
+    gainParams.map_points_v = mapPointsV;
+    gainParams.map_points_h = mapPointsH;
+    
+    // Compute pixel pitch between adjacent map points in rows/cols (in pixels)
+    // If only a single point along a dimension, pitch covers the full extent
+    const unsigned int imageRows = imageHeight;
+    const unsigned int imageCols = imageWidth;
+    unsigned int rowPitch = (mapPointsV > 1)
+        ? static_cast<unsigned int>(std::max(1u, (imageRows - 1) / (mapPointsV - 1)))
+        : imageRows;
+    unsigned int colPitch = (mapPointsH > 1)
+        ? static_cast<unsigned int>(std::max(1u, (imageCols - 1) / (mapPointsH - 1)))
+        : imageCols;
+    gainParams.row_pitch = rowPitch;
+    gainParams.col_pitch = colPitch;
+    
+    // Map spacing and origin in relative coordinates
+    // Spacing is relative pitch to image size; origin is relative to active area
+    gainParams.map_spacing_v = (imageRows > 0) ? static_cast<double>(rowPitch) / static_cast<double>(imageRows) : 0.0;
+    gainParams.map_spacing_h = (imageCols > 0) ? static_cast<double>(colPitch) / static_cast<double>(imageCols) : 0.0;
+    gainParams.map_origin_v = (imageRows > 0) ? static_cast<double>(std::max(0, top)) / static_cast<double>(imageRows) : 0.0;
+    gainParams.map_origin_h = (imageCols > 0) ? static_cast<double>(std::max(0, left)) / static_cast<double>(imageCols) : 0.0;
+    
+    // Number of planes in the gain map payload (match planes when available)
+    gainParams.map_planes = gainParams.planes;
+    
+    // Fill gain data in plane-major, row-major order
+    if (!metadata.lensShadingMap.empty() && !metadata.lensShadingMap[0].empty()) {
+        const size_t perPlaneSize = static_cast<size_t>(mapPointsV) * static_cast<size_t>(mapPointsH);
+        const size_t expectedSize = perPlaneSize * static_cast<size_t>(gainParams.map_planes);
+        gainParams.gain_data.reserve(expectedSize);
 
-std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short> preprocessData(
+        for (unsigned int p = 0; p < gainParams.map_planes; ++p) {
+            const unsigned int srcPlane = (p < metadata.lensShadingMap.size()) ? p : 0;
+            for (unsigned int v = 0; v < mapPointsV; ++v) {
+                for (unsigned int h = 0; h < mapPointsH; ++h) {
+                    const size_t index = static_cast<size_t>(v) * mapPointsH + h;
+                    float gain = 1.0f;
+                    if (index < metadata.lensShadingMap[srcPlane].size()) {
+                        gain = metadata.lensShadingMap[srcPlane][index];
+                        if (!std::isfinite(gain) || gain <= 0.0f) {
+                            gain = 1.0f;
+                        } else if (gain > 16.0f) {
+                            gain = 16.0f; // broader but safe upper bound
+                        }
+                    }
+                    gainParams.gain_data.push_back(gain);
+                }
+            }
+        }
+
+        // Only add the gain map if we have valid data size
+        if (gainParams.gain_data.size() == expectedSize) {
+            opcodeList.AddGainMap(gainParams);
+        }
+    }
+    
+    return opcodeList;
+}
+
+std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short, tinydngwriter::OpcodeList> preprocessData(
     std::vector<uint8_t>& data,
     uint32_t& inOutWidth,
     uint32_t& inOutHeight,
@@ -578,161 +578,470 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short> 
     QuadBayerMode quadBayerOption,
     bool includeOpcode)
 {
-    if (scale > 1) scale = (scale / 2) * 2; else scale = 1;
-    
-    uint32_t newWidth  = (inOutWidth  / scale) & ~3u;
-    uint32_t newHeight = (inOutHeight / scale) & ~3u;
-    
-    const auto& srcBlackLevel = cameraConfiguration.blackLevel;
-    const auto  srcWhiteLevel = cameraConfiguration.whiteLevel;
-    
-    const std::array<float,4> linear = {
-        1.f / (srcWhiteLevel - srcBlackLevel[0]),
-        1.f / (srcWhiteLevel - srcBlackLevel[1]),
-        1.f / (srcWhiteLevel - srcBlackLevel[2]),
-        1.f / (srcWhiteLevel - srcBlackLevel[3])
-    };
-    
-    auto   dstBlackLevel = srcBlackLevel;
-    float  dstWhiteLevel = srcWhiteLevel;
-    
-    auto   lensShadingMap = metadata.lensShadingMap;
-    if (applyShadingMap) {
-        int srcBits = bitsNeeded(static_cast<unsigned short>(cameraConfiguration.whiteLevel));
-        int useBits = std::min(16, srcBits + 4);
-        
-        dstWhiteLevel = std::pow(2.f, useBits) - 1.f;
-        for (auto& v : dstBlackLevel) v *= (1 << (useBits - srcBits));
-        if(normaliseShadingMap)
-            normalizeShadingMap(lensShadingMap);
+    scale = (scale > 1 ? (scale / 2) * 2 : 1); // Ensure even scale for downscaling
+
+    uint32_t cfaSize = (interpretAsQuadBayer ? 2 : 1);  //assume quadbayer for now
+
+    uint32_t newWidth, newHeight;
+    uint32_t cropWidth = 0, cropHeight = 0;
+
+    if (!cropTarget.empty()) {
+        const size_t separatorPos = cropTarget.find('x');
+        if (separatorPos != std::string::npos) {
+            try {
+                cropWidth = std::stoul(cropTarget.substr(0, separatorPos));
+                cropHeight = std::stoul(cropTarget.substr(separatorPos + 1));
+            } catch (const std::exception&) {
+                // Ignore invalid crop target
+                cropWidth = 0;
+                cropHeight = 0;
+    }}}
+
+    if (cropWidth > 0 && cropHeight > 0 && cropWidth <= inOutWidth && cropHeight <= inOutHeight) {
+        newWidth = cropWidth / scale;
+        newHeight = cropHeight / scale;
+    } else {
+        // Calculate new dimensions
+        newWidth = inOutWidth / scale;
+        newHeight = inOutHeight / scale;
     }
     
-    const int blocksX = newWidth  / 2;
-    const int blocksY = newHeight / 2;
-    std::vector<std::array<float,4>> shadingLUT;
-    if (applyShadingMap)
-        shadingLUT.resize(static_cast<size_t>(blocksX * blocksY));
-    
-    const int fullWidth  = metadata.originalWidth;
-    const int fullHeight = metadata.originalHeight;
-    const int left       = (fullWidth  - inOutWidth ) / 2;
-    const int top        = (fullHeight - inOutHeight) / 2;
-    
-    const float shadingMapScaleX = 1.f / fullWidth;
-    const float shadingMapScaleY = 1.f / fullHeight;
-    
-    if (applyShadingMap) {
-        size_t idx = 0;
-        for (int by = 0; by < blocksY; ++by)
-            for (int bx = 0; bx < blocksX; ++bx, ++idx)
-            {
-                const uint32_t srcX = bx * 2 * scale;
-                const uint32_t srcY = by * 2 * scale;
-                const float sx = (srcX + left) * shadingMapScaleX;
-                const float sy = (srcY + top ) * shadingMapScaleY;
+    // Align to 4 for bayer pattern and also because we read 4 bytes at a time when encoding to 10/14 bit
+    newWidth = (newWidth / 4) * 4;
+    newHeight = (newHeight / 4) * 4;    
+
+    auto srcBlackLevel = metadata.dynamicBlackLevel;
+    auto srcWhiteLevel = metadata.dynamicWhiteLevel;
+
+    if (levels == "Static") {
+        srcBlackLevel = cameraConfiguration.blackLevel;
+        srcWhiteLevel = cameraConfiguration.whiteLevel;
+    } else if (!levels.empty()) {
+        const size_t separatorPos = levels.find('/');
+        if (separatorPos != std::string::npos) {
+            try {
+                const std::string whiteLevelStr = levels.substr(0, separatorPos);
+                const std::string blackLevelStr = levels.substr(separatorPos + 1);
                 
-                shadingLUT[idx] = {
-                    getShadingMapValue(sx, sy, 0, lensShadingMap,
-                                       metadata.lensShadingMapWidth,
-                                       metadata.lensShadingMapHeight),
-                    getShadingMapValue(sx, sy, 1, lensShadingMap,
-                                       metadata.lensShadingMapWidth,
-                                       metadata.lensShadingMapHeight),
-                    getShadingMapValue(sx, sy, 2, lensShadingMap,
-                                       metadata.lensShadingMapWidth,
-                                       metadata.lensShadingMapHeight),
-                    getShadingMapValue(sx, sy, 3, lensShadingMap,
-                                       metadata.lensShadingMapWidth,
-                                       metadata.lensShadingMapHeight)
-                };
+                // Parse white level (int or float)
+                if (whiteLevelStr.find('.') != std::string::npos) 
+                    srcWhiteLevel = std::stof(whiteLevelStr);
+                else 
+                    srcWhiteLevel = std::stoul(whiteLevelStr);                
+                
+                // Parse black level (single value or comma-separated values)
+                if (blackLevelStr.find(',') != std::string::npos) {
+                    // Parse comma-separated values
+                    std::array<float, 4> blackValues = {0.0f, 0.0f, 0.0f, 0.0f};
+                    size_t start = 0;
+                    size_t valueIndex = 0;
+                    
+                    while (start < blackLevelStr.length() && valueIndex < 4) {
+                        size_t commaPos = blackLevelStr.find(',', start);
+                        if (commaPos == std::string::npos) commaPos = blackLevelStr.length();
+                        
+                        std::string valueStr = blackLevelStr.substr(start, commaPos - start);
+                        if (valueStr.find('.') != std::string::npos) {
+                            blackValues[valueIndex] = std::stof(valueStr);
+                        } else {
+                            blackValues[valueIndex] = std::stoul(valueStr);
+                        }
+                        
+                        valueIndex++;
+                        start = commaPos + 1;
+                    }                    
+                    srcBlackLevel = blackValues;
+                } else {
+                    // Parse single value for all channels
+                    float blackLevelValue;
+                    if (blackLevelStr.find('.') != std::string::npos) 
+                        blackLevelValue = std::stof(blackLevelStr);
+                    else 
+                        blackLevelValue = std::stoul(blackLevelStr);                                
+                    srcBlackLevel = {blackLevelValue, blackLevelValue, blackLevelValue, blackLevelValue};
+                }
+            } catch (const std::exception&) {
+                // Handle exception silently
             }
-    }
-    
-    std::vector<uint8_t> dst(sizeof(uint16_t) * newWidth * newHeight);
-    uint16_t*            dstData = reinterpret_cast<uint16_t*>(dst.data());
-    uint16_t*            srcData = reinterpret_cast<uint16_t*>(data.data());
-    const uint32_t       srcStride = inOutWidth;
-
-    dispatch_apply(blocksY, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^(size_t by) {
-        const size_t lutRow  = static_cast<size_t>(by * blocksX);
-        const uint32_t dstRow0 = by * 2 * newWidth;
-        const uint32_t dstRow1 = dstRow0 + newWidth;
-        
-        const uint32_t srcRow0 = by * 2 * scale * srcStride;
-        const uint32_t srcRow1 = srcRow0 + srcStride * scale;
-        
-        for (int bx = 0; bx < blocksX; ++bx)
-        {
-            const size_t lutIdx = lutRow + bx;
-            const uint32_t srcCol = bx * 2 * scale;
-            
-            const uint16_t s0 = srcData[srcRow0 + srcCol];
-            const uint16_t s1 = srcData[srcRow0 + srcCol + 1];
-            const uint16_t s2 = srcData[srcRow1 + srcCol];
-            const uint16_t s3 = srcData[srcRow1 + srcCol + 1];
-            
-            float shade0 = 1.f, shade1 = 1.f, shade2 = 1.f, shade3 = 1.f;
-            if (applyShadingMap) {
-                const auto& lut = shadingLUT[lutIdx];
-                shade0 = lut[cfa[0]];
-                shade1 = lut[cfa[1]];
-                shade2 = lut[cfa[2]];
-                shade3 = lut[cfa[3]];
-            }
-
-            uint16x4_t s     = {s0, s1, s2, s3};
-            float32x4_t sf   = vcvtq_f32_u32(vmovl_u16(s));
-            
-            const float blackArr[4] = {
-                srcBlackLevel[0], srcBlackLevel[1],
-                srcBlackLevel[2], srcBlackLevel[3]};
-            const float linArr[4]   = {linear[0], linear[1], linear[2], linear[3]};
-            const float shadeArr[4] = {shade0, shade1, shade2, shade3};
-            const float dstBLArr[4] = {
-                dstBlackLevel[0], dstBlackLevel[1],
-                dstBlackLevel[2], dstBlackLevel[3]};
-            const float dstScaleArr[4] = {
-                dstWhiteLevel - dstBlackLevel[0],
-                dstWhiteLevel - dstBlackLevel[1],
-                dstWhiteLevel - dstBlackLevel[2],
-                dstWhiteLevel - dstBlackLevel[3]};
-            
-            float32x4_t vBlack  = vld1q_f32(blackArr);
-            float32x4_t vLinear = vld1q_f32(linArr);
-            float32x4_t vShade  = vld1q_f32(shadeArr);
-            float32x4_t vDstBL  = vld1q_f32(dstBLArr);
-            float32x4_t vDstScl = vld1q_f32(dstScaleArr);
-            
-            float32x4_t v = vmaxq_f32(vdupq_n_f32(0.f),
-                                      vmulq_f32(vLinear,
-                                                vmulq_f32(vShade,
-                                                          vsubq_f32(sf, vBlack))));
-            v = vmlaq_f32(vDstBL, v, vDstScl);                 // vDstBL + v * scale
-            v = vminq_f32(v, vdupq_n_f32(dstWhiteLevel));       // clamp
-            
-            uint32x4_t ui = vcvtq_u32_f32(v);
-            uint16x4_t us = vmovn_u32(ui);
-            
-            /* store */
-            uint32_t dstOff = bx * 2;
-            // us = {d0, d1, d2, d3}
-            dstData[dstRow0 + dstOff    ] = vget_lane_u16(us, 0);
-            dstData[dstRow0 + dstOff + 1] = vget_lane_u16(us, 1);
-            dstData[dstRow1 + dstOff    ] = vget_lane_u16(us, 2);
-            dstData[dstRow1 + dstOff + 1] = vget_lane_u16(us, 3);
         }
-    });
-    
-    inOutWidth  = newWidth;
+    }
+
+    if(cfaSize > 1 && scale == 2) {
+        srcWhiteLevel *= cfaSize * cfaSize;
+        for (int i = 0; i < srcBlackLevel.size(); i++) {
+            srcBlackLevel[i] *= cfaSize * cfaSize;
+        }        
+    }
+
+    const std::array<float, 4> linear = {
+        1.0f / (srcWhiteLevel - srcBlackLevel[0]),
+        1.0f / (srcWhiteLevel - srcBlackLevel[1]),
+        1.0f / (srcWhiteLevel - srcBlackLevel[2]),
+        1.0f / (srcWhiteLevel - srcBlackLevel[3])
+    };
+
+    auto dstBlackLevel = srcBlackLevel;
+    auto dstWhiteLevel = srcWhiteLevel;
+
+    // Calculate shading map offsets
+    auto lensShadingMap = metadata.lensShadingMap;
+
+    const int fullWidth = metadata.originalWidth;
+    const int fullHeight = metadata.originalHeight;
+
+    int left = 0;
+    int top = 0;
+    if ((!(cropWidth > 0 && cropHeight > 0)) || inOutWidth < cropWidth || inOutHeight < cropHeight) {
+        left = (fullWidth - inOutWidth) / 2;
+        top = (fullHeight - inOutHeight) / 2;
+        cropWidth = 0;
+        cropHeight = 0;
+    } else {
+        left = (fullWidth - cropWidth) / 2;
+        top = (fullHeight - cropHeight) / 2;
+    }
+
+    const float shadingMapScaleX = 1.0f / static_cast<float>(fullWidth);
+    const float shadingMapScaleY = 1.0f / static_cast<float>(fullHeight);
+
+    int useBits = 0;
+
+    // When applying shading map, increase precision
+    if(applyShadingMap) {
+        if(vignetteOnlyColor)
+            colorOnlyShadingMap(lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight, cfa);
+        if(normaliseShadingMap) {
+            normalizeShadingMap(lensShadingMap);
+            useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) + 4);
+        } else {
+            if (debugShadingMap)
+                invertShadingMap(lensShadingMap);
+            else if (logTransform != LogTransformMode::Disabled) {
+                if (logTransform == LogTransformMode::KeepInput) {
+                    useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) + 0); //?
+                    dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+                } else if (logTransform == LogTransformMode::ReduceBy2Bit) {
+                    useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) - 2);
+                    dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+                } else if (logTransform == LogTransformMode::ReduceBy4Bit) {
+                    useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) - 4);
+                    dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+                } else if (logTransform == LogTransformMode::ReduceBy6Bit) {
+                    useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) - 6);
+                    dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+                } else if (logTransform == LogTransformMode::ReduceBy8Bit) {
+                    useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) - 8);
+                    dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+                } else {
+                    useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) + 2);
+                    dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+                }
+            } else {
+                useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) + 2);
+                dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+            }
+        }
+        for(auto& v : dstBlackLevel)
+            v = 0;
+    } else if (logTransform != LogTransformMode::Disabled) {
+        if (logTransform == LogTransformMode::ReduceBy2Bit) {
+            useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) - 2);
+            dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+        } else if (logTransform == LogTransformMode::ReduceBy4Bit) {
+            useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) - 4);
+            dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+        } else if (logTransform == LogTransformMode::ReduceBy6Bit) {
+            useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) - 6);
+            dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+        } else if (logTransform == LogTransformMode::ReduceBy8Bit) {
+            useBits = std::min(16, bitsNeeded(static_cast<unsigned short>(dstWhiteLevel)) - 8);
+            dstWhiteLevel = std::pow(2.0f, useBits) - 1;
+        }
+        for(auto& v : dstBlackLevel)
+            v = 0;
+    }
+
+    // Create opcode list if requested and shading map is not applied to image data
+    tinydngwriter::OpcodeList opcodeList2;
+    if(includeOpcode && !applyShadingMap) {
+        // Create lens shading map as opcode list 2 gain map
+        opcodeList2 = createLensShadingOpcodeList(metadata, inOutWidth, inOutHeight, left, top);
+    }
+
+    //
+    // Preprocess data
+    //
+
+    uint32_t originalWidth = inOutWidth;
+    uint32_t dstOffset = 0;
+
+    // Reinterpret the input data as uint16_t for reading
+    uint16_t* srcData = reinterpret_cast<uint16_t*>(data.data());
+
+    // Process the image by copying and packing 2x2 Bayer blocks
+    std::array<float, 16> shadingMapVals;
+    shadingMapVals.fill(1.0f);
+    std::vector<uint8_t> dst;
+    dst.resize(sizeof(uint16_t) * newWidth * newHeight);
+    uint16_t* dstData = reinterpret_cast<uint16_t*>(dst.data());
+
+    for (auto y = 0; y < newHeight; y += 2 * (scale < 2 ? cfaSize : 1)) {
+        for (auto x = 0; x < newWidth; x += 2 * (scale < 2 ? cfaSize : 1)) {
+            // Get the source coordinates (scaled)
+            uint32_t srcY = y * scale;
+            uint32_t srcX = x * scale;            
+ 
+            if (cfaSize < 2 | scale > 1) {
+                std::array<uint16_t, 4> s;
+                if (cfaSize == 2 && scale == 2) {                    
+                    s[0] = srcData[srcY * originalWidth + srcX] + srcData[srcY * originalWidth + srcX + 1] + srcData[(srcY + 1) * originalWidth + srcX] + srcData[(srcY + 1) * originalWidth + srcX + 1];
+                    s[1] = srcData[srcY * originalWidth + srcX + 2] + srcData[srcY * originalWidth + srcX + 3] + srcData[(srcY + 1) * originalWidth + srcX + 2] + srcData[(srcY + 1) * originalWidth + srcX + 3];
+                    s[2] = srcData[(srcY + 2) * originalWidth + srcX] + srcData[(srcY + 2) * originalWidth + srcX + 1] + srcData[(srcY + 3) * originalWidth + srcX] + srcData[(srcY + 3) * originalWidth + srcX + 1];
+                    s[3] = srcData[(srcY + 2) * originalWidth + srcX + 2] + srcData[(srcY + 2) * originalWidth + srcX + 3] + srcData[(srcY + 3) * originalWidth + srcX + 2] + srcData[(srcY + 3) * originalWidth + srcX + 3];
+                } else {
+                    s[0] = srcData[srcY * originalWidth + srcX];
+                    s[1] = srcData[srcY * originalWidth + srcX + cfaSize];
+                    s[2] = srcData[(srcY + cfaSize) * originalWidth + srcX];
+                    s[3] = srcData[(srcY + cfaSize) * originalWidth + srcX + cfaSize];
+                }                
+                
+                if(applyShadingMap) {                              
+                    // Calculate position in shading map     
+                    shadingMapVals[0] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, cfa[0], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[1] = getShadingMapValue((srcX + left + scale) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, cfa[1], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[2] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + scale) * shadingMapScaleY, cfa[2], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[3] = getShadingMapValue((srcX + left + scale) * shadingMapScaleX, (srcY + top + scale) * shadingMapScaleY, cfa[3], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                }
+
+                std::array<float, 4> p;
+
+                if(debugShadingMap) {
+                    for (int i = 0; i < 4; i++)
+                        p[i] = std::max(0.0f, linear[i] * (srcWhiteLevel - srcBlackLevel[i]) * shadingMapVals[i]) * (dstWhiteLevel - dstBlackLevel[i]);
+                } else if (logTransform == LogTransformMode::Disabled) {               // Linearize and (maybe) apply shading map
+                    for (int i = 0; i < 4; i++)
+                        p[i] = std::max(0.0f, linear[i] * (s[i] - srcBlackLevel[i]) * shadingMapVals[i]) * (dstWhiteLevel - dstBlackLevel[i]);
+                } else {                                
+                    std::array<float, 4> dither; // Apply logarithmic tone mapping with triangular dithering. Generate improved triangular dither with better randomization                                    
+                    for (int i = 0; i < 4; i++) { // Use different seeds for each pixel in the 2x2 block to avoid correlation                    
+                        uint32_t seed = ((x + (i & 1)) * 1664525 + (y + (i >> 1)) * 1013904223) ^ 0xdeadbeef; // Create unique seed for each pixel using position and pixel index
+                        // Apply multiple hash iterations to improve randomness
+                        seed ^= seed >> 16; seed *= 0x85ebca6b; seed ^= seed >> 13; seed *= 0xc2b2ae35; seed ^= seed >> 16;                    
+                        // Generate triangular dither: sum of two uniform random values
+                        float r1 = (seed & 0xffff) / 65535.0f; float r2 = ((seed >> 16) & 0xffff) / 65535.0f;                    
+                        // Triangular distribution: r1 + r2 - 1, range [-1, 1] Scale down for subtle dithering appropriate for log encoding
+                        dither[i] = (r1 + r2 - 1.0f) * 0.5f;
+                        // Apply log2 transform that preserves black and white levels as identity points
+                        float logValue = std::log2(1.0f + 60.0f * std::max(0.0f, linear[i] * (s[i] - srcBlackLevel[i]) * shadingMapVals[i])) / std::log2(61.0f);                  
+                        p[i] = (logValue) * dstWhiteLevel + dither[i]; // Scale by dstWhiteLevel to match what the linearization table expects
+                    }
+                }            
+                
+                for (int i = 0; i < 4; i++)
+                    s[i] = std::clamp(std::round((p[i] + dstBlackLevel[i])), 0.f, dstWhiteLevel);
+
+                // Copy the 2x2 Bayer block
+                dstData[dstOffset]                 = static_cast<unsigned short>(s[0]);
+                dstData[dstOffset + 1]             = static_cast<unsigned short>(s[1]);
+                dstData[dstOffset + newWidth]      = static_cast<unsigned short>(s[2]);
+                dstData[dstOffset + newWidth + 1]  = static_cast<unsigned short>(s[3]);
+
+                dstOffset += 2;
+            } else {
+                std::array<uint16_t, 16> s = {                
+                    srcData[srcY * originalWidth + srcX], srcData[srcY * originalWidth + srcX + 1], srcData[(srcY + 1) * originalWidth + srcX], srcData[(srcY + 1) * originalWidth + srcX + 1],
+                    srcData[srcY * originalWidth + srcX + 2], srcData[srcY * originalWidth + srcX + 3], srcData[(srcY + 1) * originalWidth + srcX + 2], srcData[(srcY + 1) * originalWidth + srcX + 3],
+                    srcData[(srcY + 2) * originalWidth + srcX], srcData[(srcY + 2) * originalWidth + srcX + 1], srcData[(srcY + 3) * originalWidth + srcX], srcData[(srcY + 3) * originalWidth + srcX + 1],
+                    srcData[(srcY + 2) * originalWidth + srcX + 2], srcData[(srcY + 2) * originalWidth + srcX + 3], srcData[(srcY + 3) * originalWidth + srcX + 2], srcData[(srcY + 3) * originalWidth + srcX + 3]
+                };
+
+                if(applyShadingMap) { 
+                    // Calculate position in shading map     
+                    shadingMapVals[0] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[1] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[2] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[3] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[4] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[5] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[6] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[7] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[8] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[9] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[10] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[11] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[12] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[13] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[14] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    shadingMapVals[15] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                }
+
+                std::array<float, 16> p;
+
+                for (int i = 0; i < 16; i++)
+                    p[i] = linear[i%4] * (s[i] - srcBlackLevel[i%4]) * shadingMapVals[i];
+
+                std::array<float, 48> d;
+
+                std::array<float, 16> r;
+
+                /*if(cfaSize > 1 && (quadBayerOption == "Remosaic" || quadBayerOption == "Demosaic only")) {
+                    // Quad Bayer demosaic - simplified bilinear interpolation
+                    // p[16] contains 4x4 Quad Bayer block, d[48] will contain 16 RGB pixels
+                    
+                    // Simple bilinear interpolation for Quad Bayer and remosaic to normal Bayer
+                    for(int py = 0; py < 4; py++) {
+                        for(int px = 0; px < 4; px++) {
+                            int idx = py * 4 + px;
+                            int outIdx = idx * 3;
+                            
+                            // Determine which color this pixel is based on CFA pattern
+                            // For Quad Bayer, each 2x2 block has the same color
+                            int cfaIdx = ((py / 2) % 2) * 2 + ((px / 2) % 2);
+                            int color = cfa[cfaIdx];
+                            
+                            float red = 0, green = 0, blue = 0;
+                            
+                            if(color == 0) { // Red pixel
+                                red = p[idx];
+                                // Interpolate green from neighbors
+                                float gSum = 0; int gCount = 0;
+                                if(px > 0 && cfa[(((py / 2) % 2)) * 2 + (((px-1) / 2) % 2)] == 1) { gSum += p[idx-1]; gCount++; }
+                                if(px < 3 && cfa[(((py / 2) % 2)) * 2 + (((px+1) / 2) % 2)] == 1) { gSum += p[idx+1]; gCount++; }
+                                if(py > 0 && cfa[(((py-1) / 2) % 2) * 2 + ((px / 2) % 2)] == 1) { gSum += p[idx-4]; gCount++; }
+                                if(py < 3 && cfa[(((py+1) / 2) % 2) * 2 + ((px / 2) % 2)] == 1) { gSum += p[idx+4]; gCount++; }
+                                green = gCount > 0 ? gSum / gCount : p[idx];
+                                // Interpolate blue from diagonals
+                                float bSum = 0; int bCount = 0;
+                                if(px > 0 && py > 0 && cfa[(((py-1) / 2) % 2) * 2 + (((px-1) / 2) % 2)] == 2) { bSum += p[idx-5]; bCount++; }
+                                if(px < 3 && py > 0 && cfa[(((py-1) / 2) % 2) * 2 + (((px+1) / 2) % 2)] == 2) { bSum += p[idx-3]; bCount++; }
+                                if(px > 0 && py < 3 && cfa[(((py+1) / 2) % 2) * 2 + (((px-1) / 2) % 2)] == 2) { bSum += p[idx+3]; bCount++; }
+                                if(px < 3 && py < 3 && cfa[(((py+1) / 2) % 2) * 2 + (((px+1) / 2) % 2)] == 2) { bSum += p[idx+5]; bCount++; }
+                                blue = bCount > 0 ? bSum / bCount : p[idx];
+                            }
+                            else if(color == 1) { // Green pixel
+                                green = p[idx];
+                                // Interpolate red and blue from neighbors
+                                float rSum = 0, bSum = 0; int rCount = 0, bCount = 0;
+                                if(px > 0) { 
+                                    int c = cfa[(((py / 2) % 2)) * 2 + (((px-1) / 2) % 2)];
+                                    if(c == 0) { rSum += p[idx-1]; rCount++; }
+                                    else if(c == 2) { bSum += p[idx-1]; bCount++; }
+                                }
+                                if(px < 3) {
+                                    int c = cfa[(((py / 2) % 2)) * 2 + (((px+1) / 2) % 2)];
+                                    if(c == 0) { rSum += p[idx+1]; rCount++; }
+                                    else if(c == 2) { bSum += p[idx+1]; bCount++; }
+                                }
+                                if(py > 0) {
+                                    int c = cfa[(((py-1) / 2) % 2) * 2 + ((px / 2) % 2)];
+                                    if(c == 0) { rSum += p[idx-4]; rCount++; }
+                                    else if(c == 2) { bSum += p[idx-4]; bCount++; }
+                                }
+                                if(py < 3) {
+                                    int c = cfa[(((py+1) / 2) % 2) * 2 + ((px / 2) % 2)];
+                                    if(c == 0) { rSum += p[idx+4]; rCount++; }
+                                    else if(c == 2) { bSum += p[idx+4]; bCount++; }
+                                }
+                                red = rCount > 0 ? rSum / rCount : p[idx];
+                                blue = bCount > 0 ? bSum / bCount : p[idx];
+                            }
+                            else { // Blue pixel
+                                blue = p[idx];
+                                // Interpolate green from neighbors
+                                float gSum = 0; int gCount = 0;
+                                if(px > 0 && cfa[(((py / 2) % 2)) * 2 + (((px-1) / 2) % 2)] == 1) { gSum += p[idx-1]; gCount++; }
+                                if(px < 3 && cfa[(((py / 2) % 2)) * 2 + (((px+1) / 2) % 2)] == 1) { gSum += p[idx+1]; gCount++; }
+                                if(py > 0 && cfa[(((py-1) / 2) % 2) * 2 + ((px / 2) % 2)] == 1) { gSum += p[idx-4]; gCount++; }
+                                if(py < 3 && cfa[(((py+1) / 2) % 2) * 2 + ((px / 2) % 2)] == 1) { gSum += p[idx+4]; gCount++; }
+                                green = gCount > 0 ? gSum / gCount : p[idx];
+                                // Interpolate red from diagonals
+                                float rSum = 0; int rCount = 0;
+                                if(px > 0 && py > 0 && cfa[(((py-1) / 2) % 2) * 2 + (((px-1) / 2) % 2)] == 0) { rSum += p[idx-5]; rCount++; }
+                                if(px < 3 && py > 0 && cfa[(((py-1) / 2) % 2) * 2 + (((px+1) / 2) % 2)] == 0) { rSum += p[idx-3]; rCount++; }
+                                if(px > 0 && py < 3 && cfa[(((py+1) / 2) % 2) * 2 + (((px-1) / 2) % 2)] == 0) { rSum += p[idx+3]; rCount++; }
+                                if(px < 3 && py < 3 && cfa[(((py+1) / 2) % 2) * 2 + (((px+1) / 2) % 2)] == 0) { rSum += p[idx+5]; rCount++; }
+                                red = rCount > 0 ? rSum / rCount : p[idx];
+                            }
+                            
+                            // Store demosaiced RGB
+                            d[outIdx] = red;
+                            d[outIdx + 1] = green;
+                            d[outIdx + 2] = blue;
+                            
+                            // Remosaic to normal Bayer - extract appropriate channel based on normal Bayer CFA pattern
+                            int bayerCfaIdx = (py % 2) * 2 + (px % 2);
+                            int bayerColor = cfa[bayerCfaIdx];
+                            
+                            //if(bayerColor == 0) { // Red position in normal Bayer
+                                r[idx] = red;
+                            //}
+                            //else if(bayerColor == 1) { // Green position in normal Bayer
+                                //r[idx] = green;
+                            //}
+                            //else { // Blue position in normal Bayer
+                              //  r[idx] = blue;
+                            //}
+                        }
+                    }
+                    p = r;
+                }*/
+
+
+                if (logTransform == LogTransformMode::Disabled) {               // Linearize and (maybe) apply shading map
+                    for (int i = 0; i < 16; i++)
+                        p[i] = std::max(0.0f, p[i] * (dstWhiteLevel - dstBlackLevel[i%4]));
+                } else {                                
+                    std::array<float, 16> dither; // Apply logarithmic tone mapping with triangular dithering. Generate improved triangular dither with better randomization                                    
+                    for (int i = 0; i < 16; i++) { // Use different seeds for each pixel in the 2x2 block to avoid correlation                    
+                        uint32_t seed = ((x + (i & 1)) * 1664525 + (y + (i >> 1)) * 1013904223) ^ 0xdeadbeef; // Create unique seed for each pixel using position and pixel index
+                        // Apply multiple hash iterations to improve randomness
+                        seed ^= seed >> 16; seed *= 0x85ebca6b; seed ^= seed >> 13; seed *= 0xc2b2ae35; seed ^= seed >> 16;                    
+                        // Generate triangular dither: sum of two uniform random values
+                        float r1 = (seed & 0xffff) / 65535.0f; float r2 = ((seed >> 16) & 0xffff) / 65535.0f;                    
+                        // Triangular distribution: r1 + r2 - 1, range [-1, 1] Scale down for subtle dithering appropriate for log encoding
+                        dither[i] = (r1 + r2 - 1.0f) * 0.5f;
+                        // Apply log2 transform that preserves black and white levels as identity points
+                        float logValue = std::log2(1.0f + 60.0f * std::max(0.0f, p[i])) / std::log2(61.0f);                  
+                        p[i] = (logValue) * dstWhiteLevel + dither[i]; // Scale by dstWhiteLevel to match what the linearization table expects
+                    }
+                }            
+
+                for (int i = 0; i < 16; i++)
+                    s[i] = std::clamp(std::round((p[i] + dstBlackLevel[i%4])), 0.f, dstWhiteLevel);
+                    
+                dstData[dstOffset]                      = static_cast<unsigned short>(s[0]); 
+                dstData[dstOffset + 1]                  = static_cast<unsigned short>(s[1]);
+                dstData[dstOffset + newWidth]           = static_cast<unsigned short>(s[2]);
+                dstData[dstOffset + newWidth + 1]       = static_cast<unsigned short>(s[3]);
+                dstData[dstOffset + 2]                  = static_cast<unsigned short>(s[4]); 
+                dstData[dstOffset + 3]                  = static_cast<unsigned short>(s[5]);
+                dstData[dstOffset + newWidth + 2]       = static_cast<unsigned short>(s[6]);
+                dstData[dstOffset + newWidth + 3]       = static_cast<unsigned short>(s[7]);
+                dstData[dstOffset + newWidth * 2]       = static_cast<unsigned short>(s[8]); 
+                dstData[dstOffset + newWidth * 2 + 1]   = static_cast<unsigned short>(s[9]);
+                dstData[dstOffset + newWidth * 3]       = static_cast<unsigned short>(s[10]);
+                dstData[dstOffset + newWidth * 3 + 1]   = static_cast<unsigned short>(s[11]);
+                dstData[dstOffset + newWidth * 2 + 2]   = static_cast<unsigned short>(s[12]); 
+                dstData[dstOffset + newWidth * 2 + 3]   = static_cast<unsigned short>(s[13]);
+                dstData[dstOffset + newWidth * 3 + 2]   = static_cast<unsigned short>(s[14]);
+                dstData[dstOffset + newWidth * 3 + 3]   = static_cast<unsigned short>(s[15]);
+                              
+                dstOffset += 2 * cfaSize;
+            }            
+        }
+        dstOffset += newWidth * (cfaSize == 2 && scale == 1 ? 3 : 1);
+    }
+
+    // Update dimensions
+    inOutWidth = newWidth;
     inOutHeight = newHeight;
-    
+
     std::array<unsigned short, 4> blackLevelResult;
-    for (size_t i = 0; i < 4; ++i)
-        blackLevelResult[i] =
-        static_cast<unsigned short>(std::round(dstBlackLevel[i]));
-    
-    return { std::move(dst), blackLevelResult,
-        static_cast<unsigned short>(dstWhiteLevel) };
+
+    for(auto i = 0; i < dstBlackLevel.size(); ++i)
+        blackLevelResult[i] = static_cast<unsigned short>(std::round(dstBlackLevel[i]));
+
+    return std::make_tuple(dst, blackLevelResult, static_cast<unsigned short>(dstWhiteLevel), opcodeList2);
 }
 
 std::shared_ptr<std::vector<char>> generateDng(
@@ -774,7 +1083,7 @@ std::shared_ptr<std::vector<char>> generateDng(
     if(!(settings.options & RENDER_OPT_CROPPING))// || width != metadata.originalWidth || height != metadata.originalHeight)
         cropTarget = "0x0";
 
-    auto [processedData, dstBlackLevel, dstWhiteLevel] = utils::preprocessData(
+    auto [processedData, dstBlackLevel, dstWhiteLevel, opcodeList2] = utils::preprocessData(
         data,
         width, height,
         metadata,
@@ -860,10 +1169,10 @@ std::shared_ptr<std::vector<char>> generateDng(
         }
     }
 
-//    if (normalizeExposure)
-//        dng.SetBaselineExposure(std::log2(baselineExpValue / (metadata.iso * metadata.exposureTime)) + exposureOffset);
-//    else
-//        dng.SetBaselineExposure(exposureOffset);
+    if (normalizeExposure)
+        dng.SetBaselineExposure(std::log2(baselineExpValue / (metadata.iso * metadata.exposureTime)) + exposureOffset);
+    else
+        dng.SetBaselineExposure(exposureOffset);
 
     if(interpretAsQuadBayer && settings.draftScale == 1 && settings.quadBayerOption == QuadBayerMode::CorrectQBCFAMetadata) {   //de/remosaic need to be disabled and add ui option. 
         dng.SetCFARepeatPatternDim(4, 4);
@@ -969,8 +1278,8 @@ std::shared_ptr<std::vector<char>> generateDng(
             dng.SetUniqueCameraModel("Panasonic Varicam RAW");
         } else if (settings.cameraModel == "Fujifilm" || settings.cameraModel == "Fujifilm X-T5") {
             dng.SetUniqueCameraModel("Fujifilm X-T5");
-//            dng.SetMake("Fujifilm");
-//            dng.SetCameraModelName("X-T5");
+            dng.SetMake("Fujifilm");
+            dng.SetCameraModelName("X-T5");
         } else {
             // Generic camera model
             dng.SetUniqueCameraModel(settings.cameraModel);
@@ -979,10 +1288,10 @@ std::shared_ptr<std::vector<char>> generateDng(
         dng.SetUniqueCameraModel(cameraConfiguration.extraData.postProcessSettings.metadata.buildModel);
     }
 
-//    // Add lens shading map as opcode list 2 if not applied to image data
-//    if (!opcodeList2.IsEmpty()) {
-//        dng.SetOpcodeList2(opcodeList2);
-//    }
+    // Add lens shading map as opcode list 2 if not applied to image data
+    if (!opcodeList2.IsEmpty()) {
+        dng.SetOpcodeList2(opcodeList2);
+    }
 
 
     // Set data
@@ -1022,7 +1331,7 @@ std::shared_ptr<std::vector<char>> generateDng(
             // Scale to 16-bit range            
             linearizationTable[i] = static_cast<unsigned short>(linearValue * 65535.0f);                  
         }        
-//        dng.SetLinearizationTable(tableSize, linearizationTable.data());
+        dng.SetLinearizationTable(tableSize, linearizationTable.data());
         std::array<unsigned short, 4> linearBlackLevel = {0, 0, 0, 0};  // Linear black is 0
         dng.SetBlackLevel(4, linearBlackLevel.data());
         dng.SetWhiteLevel(65534);  //idk why
