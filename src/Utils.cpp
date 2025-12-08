@@ -1095,7 +1095,7 @@ std::shared_ptr<std::vector<char>> generateDng(
         settings.levels,
         settings.logTransform,
         settings.quadBayerOption,
-        true  // includeOpcode = true to generate lens shading opcode when not applied to image
+        false  // includeOpcode = true to generate lens shading opcode when not applied to image
     );
 
 //    spdlog::debug("New black level {},{},{},{} and white level {}",

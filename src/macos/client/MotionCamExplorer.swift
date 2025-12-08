@@ -1,6 +1,30 @@
 import SwiftUI
 import AppKit
 
+// Enum definitions matching Types.h
+enum CFRMode: String, CaseIterable {
+    case disabled = "Disabled"
+    case preferInteger = "PreferInteger"
+    case preferDropFrame = "PreferDropFrame"
+    case medianSlowMotion = "MedianSlowMotion"
+    case averageTesting = "AverageTesting"
+}
+
+enum LogTransformMode: String, CaseIterable {
+    case disabled = ""
+    case keepInput = "KeepInput"
+    case reduceBy2Bit = "ReduceBy2Bit"
+    case reduceBy4Bit = "ReduceBy4Bit"
+    case reduceBy6Bit = "ReduceBy6Bit"
+    case reduceBy8Bit = "ReduceBy8Bit"
+}
+
+enum QuadBayerMode: String, CaseIterable {
+    case remosaic = "Remosaic"
+    case wrongCFAMetadata = "WrongCFAMetadata"
+    case correctQBCFAMetadata = "CorrectQBCFAMetadata"
+}
+
 @main
 struct MotionCamExplorerApp: App {
     // flag to detect if we ever got an Open-File event
@@ -14,6 +38,89 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // timeout for all external commands
     private let commandTimeout: TimeInterval = 15
 
+    // MARK: - Render Options
+    struct RenderOptions {
+        var draftScale: Int = 1
+        var cfrTarget: CFRMode = .preferDropFrame
+        var cropTarget: String = ""
+        var cameraModel: String = "Panasonic"
+        var levels: String = "Dynamic"
+        var logTransform: LogTransformMode = .keepInput
+        var exposureCompensation: String = "0ev"
+        var quadBayerOption: QuadBayerMode = .remosaic
+
+        // Boolean options
+        var isDraft: Bool = false
+        var applyVignetteCorrection: Bool = true
+        var normalizeShadingMap: Bool = true
+        var debugShadingMap: Bool = false
+        var vignetteOnlyColor: Bool = false
+        var normalizeExposure: Bool = false
+        var framerateConversion: Bool = false
+        var cropping: Bool = false
+        var camModelOverride: Bool = false
+        var logTransformOption: Bool = false
+        var interpretAsQuadBayer: Bool = false
+
+        func buildOptionsString() -> String {
+            var options: [String] = []
+
+            if isDraft {
+                options.append("draft=\(draftScale)")
+            }
+
+            if applyVignetteCorrection {
+                options.append("vignette_correction")
+            }
+
+            if normalizeShadingMap {
+                options.append("normalize_shading_map")
+            }
+
+            if debugShadingMap {
+                options.append("debug_shading_map")
+            }
+
+            if vignetteOnlyColor {
+                options.append("vignette_only_color")
+            }
+
+            if normalizeExposure {
+                options.append("normalize_exposure")
+            }
+
+            if framerateConversion {
+                options.append("cfr=\(cfrTarget.rawValue)")
+            }
+
+            if cropping && !cropTarget.isEmpty {
+                options.append("crop=\(cropTarget)")
+            }
+
+            if camModelOverride && !cameraModel.isEmpty {
+                options.append("camera_model=\(cameraModel)")
+            }
+
+            if !levels.isEmpty {
+                options.append("levels=\(levels)")
+            }
+
+            if logTransformOption {
+                options.append("log_transform=\(logTransform.rawValue)")
+            }
+
+            if !exposureCompensation.isEmpty {
+                options.append("exposure=\(exposureCompensation)")
+            }
+
+            if interpretAsQuadBayer {
+                options.append("quad_bayer=\(quadBayerOption.rawValue)")
+            }
+
+            return options.joined(separator: ",")
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !didOpenFile {
             showUnmountOptionsAlert()
@@ -21,9 +128,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard let firstURL = urls.first else { return }
+        guard !urls.isEmpty else { return }
         didOpenFile = true
-        showMountOptionsAlert(for: firstURL)
+
+        if urls.count == 1 {
+            // Single file - show the existing options alert
+            showMountOptionsAlert(for: urls[0])
+        } else {
+            // Multiple files - show a confirmation alert
+            showMultipleFilesAlert(for: urls)
+        }
     }
 
     private func showUnmountOptionsAlert() {
@@ -189,6 +303,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = fileURL.lastPathComponent
         alert.addButton(withTitle: "Just This File")
         alert.addButton(withTitle: "All Files in this Folder")
+        alert.addButton(withTitle: "Mount with Options")
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
@@ -205,12 +320,226 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .alertSecondButtonReturn:
             mountAllFiles(in: fileURL.deletingLastPathComponent())
 
+        case .alertThirdButtonReturn:
+            let options = showRenderOptionsDialog()
+            do {
+                try mountSingleFile(at: fileURL, with: options)
+                showAlertAndExit(message: "✅ \(fileURL.lastPathComponent) mounted successfully with custom options.")
+            } catch {
+                if let mountError = error as? MountError {
+                    handleDisabledError(mountError)
+                }
+                showAlertAndExit(message: "❌ \(error)")
+            }
+
         default:
             exit(EXIT_FAILURE)
         }
     }
 
-    enum DirectoryError: Error, CustomStringConvertible {
+    private func showRenderOptionsDialog() -> RenderOptions {
+        var options = RenderOptions()
+
+        let alert = NSAlert()
+        alert.messageText = "Render Options"
+        alert.informativeText = "Configure render settings for mounting"
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Use Defaults")
+
+        // Create the accessory view
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 550))
+
+        // Draft checkbox and scale
+        let draftCheckbox = NSButton(checkboxWithTitle: "Enable Draft Mode", target: nil, action: nil)
+        draftCheckbox.frame = NSRect(x: 20, y: 520, width: 120, height: 18)
+        accessoryView.addSubview(draftCheckbox)
+
+        let draftScaleLabel = NSTextField(labelWithString: "Draft Scale:")
+        draftScaleLabel.frame = NSRect(x: 40, y: 490, width: 80, height: 20)
+        accessoryView.addSubview(draftScaleLabel)
+
+        let draftScaleField = NSTextField(frame: NSRect(x: 120, y: 490, width: 60, height: 20))
+        draftScaleField.stringValue = "1"
+        accessoryView.addSubview(draftScaleField)
+
+        // Boolean options
+        let vignetteCorrectionCheckbox = NSButton(checkboxWithTitle: "Apply Vignette Correction", target: nil, action: nil)
+        vignetteCorrectionCheckbox.frame = NSRect(x: 20, y: 460, width: 180, height: 18)
+        vignetteCorrectionCheckbox.state = .on
+        accessoryView.addSubview(vignetteCorrectionCheckbox)
+
+        let normalizeShadingCheckbox = NSButton(checkboxWithTitle: "Normalize Shading Map", target: nil, action: nil)
+        normalizeShadingCheckbox.frame = NSRect(x: 20, y: 435, width: 180, height: 18)
+        normalizeShadingCheckbox.state = .on
+        accessoryView.addSubview(normalizeShadingCheckbox)
+
+        let debugShadingCheckbox = NSButton(checkboxWithTitle: "Debug Shading Map", target: nil, action: nil)
+        debugShadingCheckbox.frame = NSRect(x: 20, y: 410, width: 180, height: 18)
+        accessoryView.addSubview(debugShadingCheckbox)
+
+        let vignetteOnlyColorCheckbox = NSButton(checkboxWithTitle: "Vignette Only Color", target: nil, action: nil)
+        vignetteOnlyColorCheckbox.frame = NSRect(x: 20, y: 385, width: 180, height: 18)
+        accessoryView.addSubview(vignetteOnlyColorCheckbox)
+
+        let normalizeExposureCheckbox = NSButton(checkboxWithTitle: "Normalize Exposure", target: nil, action: nil)
+        normalizeExposureCheckbox.frame = NSRect(x: 20, y: 360, width: 180, height: 18)
+        accessoryView.addSubview(normalizeExposureCheckbox)
+
+        let framerateConversionCheckbox = NSButton(checkboxWithTitle: "Framerate Conversion", target: nil, action: nil)
+        framerateConversionCheckbox.frame = NSRect(x: 20, y: 335, width: 180, height: 18)
+        accessoryView.addSubview(framerateConversionCheckbox)
+
+        let croppingCheckbox = NSButton(checkboxWithTitle: "Enable Cropping", target: nil, action: nil)
+        croppingCheckbox.frame = NSRect(x: 20, y: 310, width: 120, height: 18)
+        accessoryView.addSubview(croppingCheckbox)
+
+        let cropField = NSTextField(frame: NSRect(x: 140, y: 308, width: 100, height: 22))
+        cropField.placeholderString = "e.g., 16:9"
+        accessoryView.addSubview(cropField)
+
+        let camModelOverrideCheckbox = NSButton(checkboxWithTitle: "Override Camera Model", target: nil, action: nil)
+        camModelOverrideCheckbox.frame = NSRect(x: 20, y: 280, width: 180, height: 18)
+        accessoryView.addSubview(camModelOverrideCheckbox)
+
+        let camModelField = NSTextField(frame: NSRect(x: 210, y: 278, width: 100, height: 22))
+        camModelField.stringValue = "Panasonic"
+        accessoryView.addSubview(camModelField)
+
+        let logTransformCheckbox = NSButton(checkboxWithTitle: "Log Transform", target: nil, action: nil)
+        logTransformCheckbox.frame = NSRect(x: 20, y: 250, width: 120, height: 18)
+        accessoryView.addSubview(logTransformCheckbox)
+
+        let logTransformPopup = NSPopUpButton(frame: NSRect(x: 140, y: 250, width: 150, height: 24))
+        logTransformPopup.addItems(withTitles: LogTransformMode.allCases.map { mode in
+            switch mode {
+            case .disabled: return "Disabled"
+            case .keepInput: return "Keep Input"
+            case .reduceBy2Bit: return "Reduce by 2bit"
+            case .reduceBy4Bit: return "Reduce by 4bit"
+            case .reduceBy6Bit: return "Reduce by 6bit"
+            case .reduceBy8Bit: return "Reduce by 8bit"
+            }
+        })
+        logTransformPopup.selectItem(at: 1)
+        accessoryView.addSubview(logTransformPopup)
+
+        let exposureLabel = NSTextField(labelWithString: "Exposure Compensation:")
+        exposureLabel.frame = NSRect(x: 20, y: 220, width: 160, height: 20)
+        accessoryView.addSubview(exposureLabel)
+
+        let exposureField = NSTextField(frame: NSRect(x: 180, y: 218, width: 80, height: 22))
+        exposureField.stringValue = "0ev"
+        accessoryView.addSubview(exposureField)
+
+        let levelsLabel = NSTextField(labelWithString: "Levels:")
+        levelsLabel.frame = NSRect(x: 20, y: 190, width: 80, height: 20)
+        accessoryView.addSubview(levelsLabel)
+
+        let levelsField = NSTextField(frame: NSRect(x: 100, y: 188, width: 100, height: 22))
+        levelsField.stringValue = "Dynamic"
+        accessoryView.addSubview(levelsField)
+
+        let quadBayerCheckbox = NSButton(checkboxWithTitle: "Interpret as Quad Bayer", target: nil, action: nil)
+        quadBayerCheckbox.frame = NSRect(x: 20, y: 160, width: 180, height: 18)
+        accessoryView.addSubview(quadBayerCheckbox)
+
+        let quadBayerPopup = NSPopUpButton(frame: NSRect(x: 210, y: 158, width: 150, height: 24))
+        quadBayerPopup.addItems(withTitles: QuadBayerMode.allCases.map { mode in
+            switch mode {
+            case .remosaic: return "Remosaic"
+            case .wrongCFAMetadata: return "Wrong CFA Metadata"
+            case .correctQBCFAMetadata: return "Correct QBCFA Metadata"
+            }
+        })
+        quadBayerPopup.selectItem(at: 0)
+        accessoryView.addSubview(quadBayerPopup)
+
+        let cfrLabel = NSTextField(labelWithString: "CFR Target:")
+        cfrLabel.frame = NSRect(x: 20, y: 130, width: 80, height: 20)
+        accessoryView.addSubview(cfrLabel)
+
+        let cfrPopup = NSPopUpButton(frame: NSRect(x: 100, y: 128, width: 180, height: 24))
+        cfrPopup.addItems(withTitles: CFRMode.allCases.map { mode in
+            switch mode {
+            case .disabled: return "Disabled"
+            case .preferInteger: return "Prefer Integer"
+            case .preferDropFrame: return "Prefer Drop Frame"
+            case .medianSlowMotion: return "Median (Slowmotion)"
+            case .averageTesting: return "Average (Testing)"
+            }
+        })
+        cfrPopup.selectItem(at: 2)
+        accessoryView.addSubview(cfrPopup)
+
+        alert.accessoryView = accessoryView
+
+        let response = alert.runModal()
+
+        if response == .alertFirstButtonReturn {
+            // Collect options
+            options.isDraft = draftCheckbox.state == .on
+            if let scaleValue = Int(draftScaleField.stringValue) {
+                options.draftScale = scaleValue
+            }
+
+            options.applyVignetteCorrection = vignetteCorrectionCheckbox.state == .on
+            options.normalizeShadingMap = normalizeShadingCheckbox.state == .on
+            options.debugShadingMap = debugShadingCheckbox.state == .on
+            options.vignetteOnlyColor = vignetteOnlyColorCheckbox.state == .on
+            options.normalizeExposure = normalizeExposureCheckbox.state == .on
+            options.framerateConversion = framerateConversionCheckbox.state == .on
+
+            // Map selected title to enum
+            if let selectedTitle = cfrPopup.selectedItem?.title {
+                switch selectedTitle {
+                case "Disabled": options.cfrTarget = .disabled
+                case "Prefer Integer": options.cfrTarget = .preferInteger
+                case "Prefer Drop Frame": options.cfrTarget = .preferDropFrame
+                case "Median (Slowmotion)": options.cfrTarget = .medianSlowMotion
+                case "Average (Testing)": options.cfrTarget = .averageTesting
+                default: options.cfrTarget = .preferDropFrame
+                }
+            }
+
+            options.cropping = croppingCheckbox.state == .on
+            options.cropTarget = cropField.stringValue
+
+            options.camModelOverride = camModelOverrideCheckbox.state == .on
+            options.cameraModel = camModelField.stringValue
+
+            options.logTransformOption = logTransformCheckbox.state == .on
+            // Map selected title to enum
+            if let selectedTitle = logTransformPopup.selectedItem?.title {
+                switch selectedTitle {
+                case "Disabled": options.logTransform = .disabled
+                case "Keep Input": options.logTransform = .keepInput
+                case "Reduce by 2bit": options.logTransform = .reduceBy2Bit
+                case "Reduce by 4bit": options.logTransform = .reduceBy4Bit
+                case "Reduce by 6bit": options.logTransform = .reduceBy6Bit
+                case "Reduce by 8bit": options.logTransform = .reduceBy8Bit
+                default: options.logTransform = .keepInput
+                }
+            }
+
+            options.exposureCompensation = exposureField.stringValue
+            options.levels = levelsField.stringValue
+
+            options.interpretAsQuadBayer = quadBayerCheckbox.state == .on
+            // Map selected title to enum
+            if let selectedTitle = quadBayerPopup.selectedItem?.title {
+                switch selectedTitle {
+                case "Remosaic": options.quadBayerOption = .remosaic
+                case "Wrong CFA Metadata": options.quadBayerOption = .wrongCFAMetadata
+                case "Correct QBCFA Metadata": options.quadBayerOption = .correctQBCFAMetadata
+                default: options.quadBayerOption = .remosaic
+                }
+            }
+        }
+
+        return options
+    }
+
+  enum DirectoryError: Error, CustomStringConvertible {
         case fileExistsButIsNotDirectory(path: String)
 
         var description: String {
@@ -258,10 +587,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func mountMyFS(fileUrl: URL, at mountPoint: String) throws {
+    private func mountMyFS(fileUrl: URL, at mountPoint: String, options: RenderOptions? = nil) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/sbin/mount")
-        process.arguments = ["-F", "-t", "mcrawfs", fileUrl.path, mountPoint]
+
+        var arguments: [String] = ["-F", "-t", "mcrawfs"]
+
+        // Add options if provided
+        if let options = options {
+            let optionsString = options.buildOptionsString()
+            if !optionsString.isEmpty {
+                arguments.append("-o")
+                arguments.append(optionsString)
+            }
+        }
+
+        arguments.append(fileUrl.path)
+        arguments.append(mountPoint)
+
+        process.arguments = arguments
 
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -276,6 +620,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if process.isRunning {
             process.terminate()
             process.waitUntilExit()
+            // Delete the mount point folder if mount times out
+            try? FileManager.default.removeItem(atPath: mountPoint)
             throw MountError.timeout(timeout: commandTimeout)
         }
 
@@ -283,6 +629,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let output = String(data: data, encoding: .utf8) ?? ""
 
         if process.terminationStatus != 0 {
+            // Delete the mount point folder if mount fails
+            try? FileManager.default.removeItem(atPath: mountPoint)
             throw MountError.nonZeroExit(status: process.terminationStatus, output: output)
         }
     }
@@ -292,7 +640,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         try mountMyFS(fileUrl: url, at: mountPoint)
     }
 
-    private func mountAllFiles(in folderURL: URL) {
+    private func mountSingleFile(at url: URL, with options: RenderOptions) throws {
+        let mountPoint = try volumeMountPoint(for: url)
+        try mountMyFS(fileUrl: url, at: mountPoint, options: options)
+    }
+
+    private func showMultipleFilesAlert(for urls: [URL]) {
+        let alert = NSAlert()
+        alert.messageText = "Do you want to mount all \(urls.count) selected files?"
+        alert.informativeText = "Selected files will be mounted with default settings."
+        alert.addButton(withTitle: "Mount All")
+        alert.addButton(withTitle: "Mount with Options")
+        alert.addButton(withTitle: "Cancel")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            // Mount all with default settings
+            mountMultipleFiles(urls)
+
+        case .alertSecondButtonReturn:
+            // Mount with custom options
+            let options = showRenderOptionsDialog()
+            mountMultipleFiles(urls, with: options)
+
+        default:
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private func mountMultipleFiles(_ urls: [URL], with options: RenderOptions? = nil) {
+        // Filter for .mcraw files
+        let mcrawFiles = urls.filter { $0.pathExtension.lowercased() == "mcraw" }
+
+        guard !mcrawFiles.isEmpty else {
+            showAlertAndExit(message: "⚠️ No .mcraw files found in selection.")
+        }
+
         let fm = FileManager.default
         var results = [(file: URL, error: Error?)]()
         let resultsLock = NSLock()
@@ -301,29 +684,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // throttle to 10 concurrent mounts
         let semaphore = DispatchSemaphore(value: 10)
 
-        // 1) Gather .mcraw files
-        let mcrawFiles: [URL]
+        // Mount the first file to catch a disabled‐fs error early
         do {
-            let items = try fm.contentsOfDirectory(
-                at: folderURL,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )
-            mcrawFiles = try items.filter { url in
-                let props = try url.resourceValues(forKeys: [.isDirectoryKey])
-                return (props.isDirectory == false) && url.pathExtension.lowercased() == "mcraw"
+            if let options = options {
+                try mountSingleFile(at: mcrawFiles[0], with: options)
+            } else {
+                try mountSingleFile(at: mcrawFiles[0])
             }
-        } catch {
-            showAlertAndExit(message: "❌ Error reading folder: \(error)")
-        }
-
-        guard !mcrawFiles.isEmpty else {
-            showAlertAndExit(message: "⚠️ No .mcraw files found in \(folderURL.path)")
-        }
-
-        // 1a) Mount the first file to catch a disabled‐fs error early
-        do {
-            try mountSingleFile(at: mcrawFiles[0])
             resultsLock.lock()
             results.append((mcrawFiles[0], nil))
             resultsLock.unlock()
@@ -336,7 +703,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             resultsLock.unlock()
         }
 
-        // 2) Launch each mount in parallel for the remaining files, max 10 at once
+        // Launch each mount in parallel for the remaining files, max 10 at once
         for file in mcrawFiles.dropFirst() {
             group.enter()
             semaphore.wait()                    // <-- throttle
@@ -347,7 +714,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
 
                 do {
-                    try self.mountSingleFile(at: file)
+                    if let options = options {
+                        try self.mountSingleFile(at: file, with: options)
+                    } else {
+                        try self.mountSingleFile(at: file)
+                    }
                     resultsLock.lock()
                     results.append((file, nil))
                     resultsLock.unlock()
@@ -361,7 +732,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         group.wait()
 
-        // 3) Summarize on the main thread
+        // Summarize on the main thread
         let failures = results.filter { $0.error != nil }
         if failures.isEmpty {
             NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/mcraws"))
@@ -383,5 +754,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             showAlertAndExit(message: msg)
         }
+    }
+
+    private func mountAllFiles(in folderURL: URL) {
+        let fm = FileManager.default
+
+        // 1) Gather .mcraw files
+        let mcrawFiles: [URL]
+        do {
+            let items = try fm.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+            mcrawFiles = try items.filter { url in
+                let props = try url.resourceValues(forKeys: [.isDirectoryKey])
+                return (props.isDirectory == false) && url.pathExtension.lowercased() == "mcraw"
+            }
+        } catch {
+            showAlertAndExit(message: "❌ Error reading folder: \(error)")
+        }
+
+        guard !mcrawFiles.isEmpty else {
+            showAlertAndExit(message: "⚠️ No .mcraw files found in \(folderURL.path)")
+        }
+
+        mountMultipleFiles(mcrawFiles)
     }
 }
