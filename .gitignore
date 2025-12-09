@@ -6,3 +6,7 @@ logs/
 out/
 vcpkg_installed/
 mcraw_player_debug_log.txt
+
+.DS_Store
+**/**/.DS_Store
+*/**/.DS_Store

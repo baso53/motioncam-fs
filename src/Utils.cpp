@@ -14,6 +14,8 @@
 
 #include <tinydng/tiny_dng_writer.h>
 
+#include <dispatch/dispatch.h>
+
 namespace motioncam {
 namespace utils {
 
@@ -786,7 +788,6 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short, 
     //
 
     uint32_t originalWidth = inOutWidth;
-    uint32_t dstOffset = 0;
 
     // Reinterpret the input data as uint16_t for reading
     uint16_t* srcData = reinterpret_cast<uint16_t*>(data.data());
@@ -798,12 +799,21 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short, 
     dst.resize(sizeof(uint16_t) * newWidth * newHeight);
     uint16_t* dstData = reinterpret_cast<uint16_t*>(dst.data());
 
-    for (auto y = 0; y < newHeight; y += 2 * (scale < 2 ? cfaSize : 1)) {
-        for (auto x = 0; x < newWidth; x += 2 * (scale < 2 ? cfaSize : 1)) {
+    const uint32_t blockStep = 2 * (scale < 2 ? cfaSize : 1);
+    const size_t rowCount = (blockStep == 0) ? 0 : (newHeight / blockStep);
+    dispatch_queue_t q = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0);
+    dispatch_apply(rowCount, q, ^(size_t rowIndex) {
+        const uint32_t y = static_cast<uint32_t>(rowIndex) * blockStep;
+        std::array<float, 16> localShadingMapVals;
+        localShadingMapVals.fill(1.0f);
+
+        for (uint32_t x = 0; x < newWidth; x += blockStep) {
             // Get the source coordinates (scaled)
             uint32_t srcY = y * scale;
-            uint32_t srcX = x * scale;            
- 
+            uint32_t srcX = x * scale;
+
+            size_t base = static_cast<size_t>(y) * newWidth + x; // destination top-left of current block
+
             if (cfaSize < 2 | scale > 1) {
                 std::array<uint16_t, 4> s;
                 if (cfaSize == 2 && scale == 2) {                    
@@ -820,20 +830,20 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short, 
                 
                 if(applyShadingMap) {                              
                     // Calculate position in shading map     
-                    shadingMapVals[0] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, cfa[0], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[1] = getShadingMapValue((srcX + left + scale) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, cfa[1], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[2] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + scale) * shadingMapScaleY, cfa[2], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[3] = getShadingMapValue((srcX + left + scale) * shadingMapScaleX, (srcY + top + scale) * shadingMapScaleY, cfa[3], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[0] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, cfa[0], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[1] = getShadingMapValue((srcX + left + scale) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, cfa[1], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[2] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + scale) * shadingMapScaleY, cfa[2], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[3] = getShadingMapValue((srcX + left + scale) * shadingMapScaleX, (srcY + top + scale) * shadingMapScaleY, cfa[3], lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
                 }
 
                 std::array<float, 4> p;
 
                 if(debugShadingMap) {
                     for (int i = 0; i < 4; i++)
-                        p[i] = std::max(0.0f, linear[i] * (srcWhiteLevel - srcBlackLevel[i]) * shadingMapVals[i]) * (dstWhiteLevel - dstBlackLevel[i]);
+                        p[i] = std::max(0.0f, linear[i] * (srcWhiteLevel - srcBlackLevel[i]) * localShadingMapVals[i]) * (dstWhiteLevel - dstBlackLevel[i]);
                 } else if (logTransform == LogTransformMode::Disabled) {               // Linearize and (maybe) apply shading map
                     for (int i = 0; i < 4; i++)
-                        p[i] = std::max(0.0f, linear[i] * (s[i] - srcBlackLevel[i]) * shadingMapVals[i]) * (dstWhiteLevel - dstBlackLevel[i]);
+                        p[i] = std::max(0.0f, linear[i] * (s[i] - srcBlackLevel[i]) * localShadingMapVals[i]) * (dstWhiteLevel - dstBlackLevel[i]);
                 } else {                                
                     std::array<float, 4> dither; // Apply logarithmic tone mapping with triangular dithering. Generate improved triangular dither with better randomization                                    
                     for (int i = 0; i < 4; i++) { // Use different seeds for each pixel in the 2x2 block to avoid correlation                    
@@ -845,7 +855,7 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short, 
                         // Triangular distribution: r1 + r2 - 1, range [-1, 1] Scale down for subtle dithering appropriate for log encoding
                         dither[i] = (r1 + r2 - 1.0f) * 0.5f;
                         // Apply log2 transform that preserves black and white levels as identity points
-                        float logValue = std::log2(1.0f + 60.0f * std::max(0.0f, linear[i] * (s[i] - srcBlackLevel[i]) * shadingMapVals[i])) / std::log2(61.0f);                  
+                        float logValue = std::log2(1.0f + 60.0f * std::max(0.0f, linear[i] * (s[i] - srcBlackLevel[i]) * localShadingMapVals[i])) / std::log2(61.0f);                  
                         p[i] = (logValue) * dstWhiteLevel + dither[i]; // Scale by dstWhiteLevel to match what the linearization table expects
                     }
                 }            
@@ -854,12 +864,11 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short, 
                     s[i] = std::clamp(std::round((p[i] + dstBlackLevel[i])), 0.f, dstWhiteLevel);
 
                 // Copy the 2x2 Bayer block
-                dstData[dstOffset]                 = static_cast<unsigned short>(s[0]);
-                dstData[dstOffset + 1]             = static_cast<unsigned short>(s[1]);
-                dstData[dstOffset + newWidth]      = static_cast<unsigned short>(s[2]);
-                dstData[dstOffset + newWidth + 1]  = static_cast<unsigned short>(s[3]);
+                dstData[base]                 = static_cast<unsigned short>(s[0]);
+                dstData[base + 1]             = static_cast<unsigned short>(s[1]);
+                dstData[base + newWidth]      = static_cast<unsigned short>(s[2]);
+                dstData[base + newWidth + 1]  = static_cast<unsigned short>(s[3]);
 
-                dstOffset += 2;
             } else {
                 std::array<uint16_t, 16> s = {                
                     srcData[srcY * originalWidth + srcX], srcData[srcY * originalWidth + srcX + 1], srcData[(srcY + 1) * originalWidth + srcX], srcData[(srcY + 1) * originalWidth + srcX + 1],
@@ -870,28 +879,28 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short, 
 
                 if(applyShadingMap) { 
                     // Calculate position in shading map     
-                    shadingMapVals[0] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[1] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[2] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[3] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[4] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[5] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[6] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[7] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[8] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[9] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[10] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[11] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[12] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[13] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[14] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
-                    shadingMapVals[15] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[0] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[1] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[2] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[3] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 0, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[4] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[5] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[6] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[7] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + 1) * shadingMapScaleY, 1, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[8] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[9] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[10] = getShadingMapValue((srcX + left) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[11] = getShadingMapValue((srcX + left + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 2, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[12] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[13] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[14] = getShadingMapValue((srcX + left + cfaSize * 2) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
+                    localShadingMapVals[15] = getShadingMapValue((srcX + left + cfaSize * 2 + 1) * shadingMapScaleX, (srcY + top + cfaSize * 2 + 1) * shadingMapScaleY, 3, lensShadingMap, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight);
                 }
 
                 std::array<float, 16> p;
 
                 for (int i = 0; i < 16; i++)
-                    p[i] = linear[i%4] * (s[i] - srcBlackLevel[i%4]) * shadingMapVals[i];
+                    p[i] = linear[i%4] * (s[i] - srcBlackLevel[i%4]) * localShadingMapVals[i];
 
                 std::array<float, 48> d;
 
@@ -1022,28 +1031,25 @@ std::tuple<std::vector<uint8_t>, std::array<unsigned short, 4>, unsigned short, 
                 for (int i = 0; i < 16; i++)
                     s[i] = std::clamp(std::round((p[i] + dstBlackLevel[i%4])), 0.f, dstWhiteLevel);
                     
-                dstData[dstOffset]                      = static_cast<unsigned short>(s[0]); 
-                dstData[dstOffset + 1]                  = static_cast<unsigned short>(s[1]);
-                dstData[dstOffset + newWidth]           = static_cast<unsigned short>(s[2]);
-                dstData[dstOffset + newWidth + 1]       = static_cast<unsigned short>(s[3]);
-                dstData[dstOffset + 2]                  = static_cast<unsigned short>(s[4]); 
-                dstData[dstOffset + 3]                  = static_cast<unsigned short>(s[5]);
-                dstData[dstOffset + newWidth + 2]       = static_cast<unsigned short>(s[6]);
-                dstData[dstOffset + newWidth + 3]       = static_cast<unsigned short>(s[7]);
-                dstData[dstOffset + newWidth * 2]       = static_cast<unsigned short>(s[8]); 
-                dstData[dstOffset + newWidth * 2 + 1]   = static_cast<unsigned short>(s[9]);
-                dstData[dstOffset + newWidth * 3]       = static_cast<unsigned short>(s[10]);
-                dstData[dstOffset + newWidth * 3 + 1]   = static_cast<unsigned short>(s[11]);
-                dstData[dstOffset + newWidth * 2 + 2]   = static_cast<unsigned short>(s[12]); 
-                dstData[dstOffset + newWidth * 2 + 3]   = static_cast<unsigned short>(s[13]);
-                dstData[dstOffset + newWidth * 3 + 2]   = static_cast<unsigned short>(s[14]);
-                dstData[dstOffset + newWidth * 3 + 3]   = static_cast<unsigned short>(s[15]);
-                              
-                dstOffset += 2 * cfaSize;
+                dstData[base]                      = static_cast<unsigned short>(s[0]); 
+                dstData[base + 1]                  = static_cast<unsigned short>(s[1]);
+                dstData[base + newWidth]           = static_cast<unsigned short>(s[2]);
+                dstData[base + newWidth + 1]       = static_cast<unsigned short>(s[3]);
+                dstData[base + 2]                  = static_cast<unsigned short>(s[4]); 
+                dstData[base + 3]                  = static_cast<unsigned short>(s[5]);
+                dstData[base + newWidth + 2]       = static_cast<unsigned short>(s[6]);
+                dstData[base + newWidth + 3]       = static_cast<unsigned short>(s[7]);
+                dstData[base + newWidth * 2]       = static_cast<unsigned short>(s[8]); 
+                dstData[base + newWidth * 2 + 1]   = static_cast<unsigned short>(s[9]);
+                dstData[base + newWidth * 3]       = static_cast<unsigned short>(s[10]);
+                dstData[base + newWidth * 3 + 1]   = static_cast<unsigned short>(s[11]);
+                dstData[base + newWidth * 2 + 2]   = static_cast<unsigned short>(s[12]); 
+                dstData[base + newWidth * 2 + 3]   = static_cast<unsigned short>(s[13]);
+                dstData[base + newWidth * 3 + 2]   = static_cast<unsigned short>(s[14]);
+                dstData[base + newWidth * 3 + 3]   = static_cast<unsigned short>(s[15]);
             }            
         }
-        dstOffset += newWidth * (cfaSize == 2 && scale == 1 ? 3 : 1);
-    }
+    });
 
     // Update dimensions
     inOutWidth = newWidth;
@@ -1110,7 +1116,7 @@ std::shared_ptr<std::vector<char>> generateDng(
         settings.levels,
         settings.logTransform,
         settings.quadBayerOption,
-        true  // includeOpcode = true to generate lens shading opcode when not applied to image
+        false  // includeOpcode = true to generate lens shading opcode when not applied to image
     );
 
     spdlog::debug("New black level {},{},{},{} and white level {}",

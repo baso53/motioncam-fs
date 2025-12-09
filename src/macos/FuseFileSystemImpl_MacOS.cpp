@@ -9,9 +9,8 @@
 #include <pwd.h>
 #include <unistd.h>
 
-#include <BS_thread_pool.hpp>
 #include <fuse_t/fuse_t.h>
-#include <QDir>
+#include <filesystem>
 
 // Logging
 #include <spdlog/spdlog.h>
@@ -22,8 +21,7 @@ namespace fs = boost::filesystem;
 
 namespace motioncam {
 
-constexpr auto CACHE_SIZE = 1024 * 1024 * 1024; // 1 GB cache size
-constexpr auto IO_THREADS = 4;
+constexpr auto CACHE_SIZE = 1024 * 1024 * 300; // 300M cache size
 
 namespace {
 
@@ -146,10 +144,17 @@ Session::~Session() {
     if(mThread && mThread->joinable())
         mThread->join();
 
-    QDir dst;
-
-    if(!dst.rmdir(mDstPath.c_str()))
-        spdlog::warn("Failed to remove {}", mDstPath);
+    // Try to remove the mount directory
+    try {
+        if(std::filesystem::exists(mDstPath)) {
+            if(!std::filesystem::remove(mDstPath)) {
+                spdlog::warn("Failed to remove {}", mDstPath);
+            }
+        }
+    }
+    catch(const std::filesystem::filesystem_error& e) {
+        spdlog::warn("Failed to remove directory {}: {}", mDstPath, e.what());
+    }
 
     spdlog::debug("Exiting session for {}", mSrcFile);
 }
@@ -182,6 +187,8 @@ void Session::init(VirtualFileSystemImpl_MCRAW* fs) {
     fuse_opt_add_arg(&args, "noappledouble");
     fuse_opt_add_arg(&args, "-o");
     fuse_opt_add_arg(&args, "noapplexattr");
+    fuse_opt_add_arg(&args, "-o");
+    fuse_opt_add_arg(&args, "backend=smb");
 
     auto* context = new FuseContext();
 
@@ -369,22 +376,9 @@ int Session::fuseRelease(const char* path, struct fuse_file_info* fi) {
 
 FuseFileSystemImpl_MacOs::FuseFileSystemImpl_MacOs() :
     mNextMountId(0),
-    mIoThreadPool(std::make_unique<BS::thread_pool>(IO_THREADS)),
-    mProcessingThreadPool(std::make_unique<BS::thread_pool>()),
     mCache(std::make_unique<LRUCache>(CACHE_SIZE))
 {
     setupLogging();
-}
-
-FuseFileSystemImpl_MacOs::~FuseFileSystemImpl_MacOs() {
-    mMountedFiles.clear();
-
-    // Wait for tasks to complete before we destroy ourselves
-    mIoThreadPool->wait();
-
-    mProcessingThreadPool->wait();
-
-    spdlog::info("Destroying FuseFileSystemImpl_MacOs()");
 }
 
 MountId FuseFileSystemImpl_MacOs::mount(
@@ -397,14 +391,15 @@ MountId FuseFileSystemImpl_MacOs::mount(
 
     spdlog::debug("Mounting file {} to {}", srcFile, dstPath);
 
-    QDir dst(dstPath.c_str());
-
-    if(!dst.exists()) {
+    // Check if destination path exists, create if it doesn't
+    if(!std::filesystem::exists(dstPath)) {
         spdlog::info("Creating path {}", dstPath);
 
-        if(!dst.mkpath(dstPath.c_str())) {
-            spdlog::error("Could not create path {}", dstPath);
-
+        try {
+            std::filesystem::create_directories(dstPath);
+        }
+        catch(const std::filesystem::filesystem_error& e) {
+            spdlog::error("Could not create path {}: {}", dstPath, e.what());
             throw std::runtime_error("Failed to create " + dstPath);
         }
     }
@@ -422,15 +417,13 @@ MountId FuseFileSystemImpl_MacOs::mount(
 
             auto* fs =
                 new VirtualFileSystemImpl_MCRAW(
-                    *mIoThreadPool,
-                    *mProcessingThreadPool,
                     *mCache,
                     settings,
                     srcFile,
                     baseName
                 );
 
-            auto session = std::make_unique<Session>(srcFile, dstPath, fs);
+            auto session = std::make_shared<Session>(srcFile, dstPath, fs);
 
             if(!session) {
                 spdlog::error("Failed to mount {} to {}", srcFile, dstPath);
