@@ -1,0 +1,12 @@
+//
+//  module.modulemap
+//  MotionCamFuse
+//
+//  Created by Sebastijan on 09.12.2025..
+//
+
+module Sebo {
+    header "FuseFileSystemImpl_MacOS.h"
+
+    export *
+}

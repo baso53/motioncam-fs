@@ -2,10 +2,8 @@
 
 #include <IVirtualFileSystem.h>
 #include <IFuseFileSystem.h>
-
-namespace BS {
-class thread_pool;
-}
+#include <memory>
+#include <dispatch/dispatch.h>
 
 namespace motioncam {
 
@@ -16,8 +14,6 @@ class VirtualFileSystemImpl_MCRAW : public IVirtualFileSystem
 {
 public:
     VirtualFileSystemImpl_MCRAW(
-        BS::thread_pool& ioThreadPool,
-        BS::thread_pool& processingThreadPool,
         LRUCache& lruCache,
         const RenderSettings& settings,
         const std::string& file,
@@ -60,8 +56,6 @@ private:
 
 private:
     LRUCache& mCache;
-    BS::thread_pool& mIoThreadPool;
-    BS::thread_pool& mProcessingThreadPool;
     const std::string mSrcPath;
     const std::string mBaseName;
     size_t mTypicalDngSize;
@@ -86,6 +80,8 @@ private:
     int mHeight;
     double mBaselineExpValue;
     std::mutex mMutex;
+    std::unique_ptr<Decoder> mDecoder;
+    dispatch_queue_t mSerialQueue;
 };
 
 } // namespace motioncam

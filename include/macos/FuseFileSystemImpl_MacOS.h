@@ -2,40 +2,33 @@
 
 #include <map>
 #include <memory>
+#include "LRUCache.h"
 
 #include "IFuseFileSystem.h"
-
-namespace BS {
-    class thread_pool;
-}
 
 namespace motioncam {
 
 struct Session;
-class LRUCache;
 
-class FuseFileSystemImpl_MacOs : public IFuseFileSystem
+class FuseFileSystemImpl_MacOs
 {
 public:
     FuseFileSystemImpl_MacOs();
-    ~FuseFileSystemImpl_MacOs();
 
     MountId mount(
         const RenderSettings& settings,
         const std::string& srcFile,
-        const std::string& dstPath) override;
+        const std::string& dstPath);
 
-    void unmount(MountId mountId) override;
+    void unmount(MountId mountId);
     void updateOptions(
         MountId mountId,
-        const RenderSettings& settings) override;
-    std::optional<FileInfo> getFileInfo(MountId mountId) override;
+        const RenderSettings& settings);
+    std::optional<FileInfo> getFileInfo(MountId mountId);
 
 private:
     MountId mNextMountId;
-    std::map<MountId, std::unique_ptr<Session>> mMountedFiles;
-    std::unique_ptr<BS::thread_pool> mIoThreadPool;
-    std::unique_ptr<BS::thread_pool> mProcessingThreadPool;
+    std::map<MountId, std::shared_ptr<Session>> mMountedFiles;
     std::unique_ptr<LRUCache> mCache;
 };
 

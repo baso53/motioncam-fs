@@ -11,13 +11,13 @@
 #include <boost/regex.hpp>
 #include <boost/algorithm/string.hpp>
 
-#include <BS_thread_pool.hpp>
 #include <spdlog/spdlog.h>
 #include <audiofile/AudioFile.h>
 
 #include <algorithm>
 #include <sstream>
 #include <tuple>
+#include <dispatch/dispatch.h>
 
 namespace motioncam {
 
@@ -204,15 +204,11 @@ IconSize=16
 }
 
 VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(
-        BS::thread_pool& ioThreadPool,
-        BS::thread_pool& processingThreadPool,
         LRUCache& lruCache,
         const RenderSettings& settings,
         const std::string& file,
         const std::string& baseName) :
         mCache(lruCache),
-        mIoThreadPool(ioThreadPool),
-        mProcessingThreadPool(processingThreadPool),
         mSrcPath(file),
         mBaseName(baseName),
         mTypicalDngSize(0),
@@ -232,17 +228,18 @@ VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(
         mLogTransform(settings.logTransform),
         mExposureCompensation(settings.exposureCompensation),
         mQuadBayerOption(settings.quadBayerOption),
-        mOptions(settings.options) {
-    
-    Decoder decoder(mSrcPath);
-    auto frames = decoder.getFrames();
+        mOptions(settings.options),
+        mDecoder(std::make_unique<Decoder>(mSrcPath)),
+        mSerialQueue(dispatch_queue_create("com.motioncam.framegen", DISPATCH_QUEUE_SERIAL)) {
+
+    auto frames = mDecoder->getFrames();
     std::sort(frames.begin(), frames.end());
     if(frames.empty())
         return;
     mBaselineExpValue = std::numeric_limits<double>::max();
     for(const auto& frame : frames) {
         nlohmann::json metadata;
-        decoder.loadFrameMetadata(frame, metadata);
+        mDecoder->loadFrameMetadata(frame, metadata);
         const auto& cameraFrameMetadata = CameraFrameMetadata::limitedParse(metadata);
         mBaselineExpValue = std::min(mBaselineExpValue, cameraFrameMetadata.iso * cameraFrameMetadata.exposureTime);
     }
@@ -251,11 +248,13 @@ VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(
 
 VirtualFileSystemImpl_MCRAW::~VirtualFileSystemImpl_MCRAW() {
     spdlog::info("Destroying VirtualFileSystemImpl_MCRAW({})", mSrcPath);
+    if(mSerialQueue) {
+        mSerialQueue = nullptr;
+    }
 }
 
 void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
-    Decoder decoder(mSrcPath);
-    auto frames = decoder.getFrames();
+    auto frames = mDecoder->getFrames();
     std::sort(frames.begin(), frames.end());
 
     if(frames.empty())
@@ -354,9 +353,9 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
     std::vector<uint8_t> data;
     nlohmann::json metadata;
 
-    decoder.loadFrame(frames[0], data, metadata);
+    mDecoder->loadFrame(frames[0], data, metadata);
 
-    auto cameraConfig = CameraConfiguration::parse(decoder.getContainerMetadata());
+    auto cameraConfig = CameraConfiguration::parse(mDecoder->getContainerMetadata());
     auto cameraFrameMetadata = CameraFrameMetadata::parse(metadata);
 
     // Store frame information
@@ -410,21 +409,21 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
     Entry audioEntry;
 
     std::vector<AudioChunk> audioChunks;
-    decoder.loadAudio(audioChunks);
+    mDecoder->loadAudio(audioChunks);
 
     if(!audioChunks.empty()) {
         auto fpsFraction = utils::toFraction(mFps);
-        AudioWriter audioWriter(mAudioFile, decoder.numAudioChannels(), decoder.audioSampleRateHz(), fpsFraction.first, fpsFraction.second);
+        AudioWriter audioWriter(mAudioFile, mDecoder->numAudioChannels(), mDecoder->audioSampleRateHz(), fpsFraction.first, fpsFraction.second);
 
         // Sync the audio to the video
         syncAudio(
             frames[0],
             audioChunks,
-            decoder.audioSampleRateHz(),
-            decoder.numAudioChannels());
+            mDecoder->audioSampleRateHz(),
+            mDecoder->numAudioChannels());
 
         for(auto& x : audioChunks)
-            audioWriter.write(x.second, x.second.size() / decoder.numAudioChannels());
+            audioWriter.write(x.second, x.second.size() / mDecoder->numAudioChannels());
     }
 
     if(!mAudioFile.empty()) {
@@ -496,7 +495,8 @@ size_t VirtualFileSystemImpl_MCRAW::generateFrame(
     std::function<void(size_t, int)> result,
     bool async)
 {
-    using FrameData = std::tuple<size_t, CameraConfiguration, CameraFrameMetadata, std::shared_ptr<std::vector<uint8_t>>>;
+    size_t readBytes = 0;
+    int errorCode = -1;
 
     // Try to get from cache first
     auto cacheEntry = mCache.get(entry);
@@ -510,26 +510,22 @@ size_t VirtualFileSystemImpl_MCRAW::generateFrame(
         // Push entry to front
         mCache.put(entry, cacheEntry);
 
+        if(result) {
+            result(actualLen, 0);
+        }
+
         return actualLen;
     }
 
-    // Use IO thread pool to decode frame
-    auto frameDataFuture = mIoThreadPool.submit_task([entry, &srcPath = mSrcPath, &options = mOptions]() -> FrameData {
-        thread_local std::map<std::string, std::unique_ptr<Decoder>> decoders;
-
+    try {
         auto timestamp = std::get<Timestamp>(entry.userData);
 
-        spdlog::debug("Reading frame {} with options {}", timestamp, optionsToString(options));
+        spdlog::debug("Reading frame {} with options {}", timestamp, optionsToString(mOptions));
 
-        if(decoders.find(srcPath) == decoders.end()) {
-            decoders[srcPath] = std::make_unique<Decoder>(srcPath);
-        }
-
-        auto& decoder = decoders[srcPath];
         auto data = std::make_shared<std::vector<uint8_t>>();
 
         nlohmann::json metadata;
-        auto allFrames = decoder->getFrames();
+        auto allFrames = mDecoder->getFrames();
 
         // Find the frame (index)
         auto it = std::find(allFrames.begin(), allFrames.end(), timestamp);
@@ -538,83 +534,58 @@ size_t VirtualFileSystemImpl_MCRAW::generateFrame(
             throw std::runtime_error("Failed to find frame");
         }
 
-        decoder->loadFrame(timestamp, *data, metadata);
+        mDecoder->loadFrame(timestamp, *data, metadata);
 
         size_t frameIndex = std::distance(allFrames.begin(), it);
+        auto containerMetadata = CameraConfiguration::parse(mDecoder->getContainerMetadata());
+        auto frameMetadata = CameraFrameMetadata::parse(metadata);
 
-        return std::make_tuple(
-            frameIndex, CameraConfiguration::parse(decoder->getContainerMetadata()), CameraFrameMetadata::parse(metadata), std::move(data));
-    });
+        spdlog::debug("Generating {}", entry.name);
 
+        RenderSettings settings(
+            mOptions,
+            mDraftScale,
+            mCFRTarget,
+            mCropTarget,
+            mCameraModel,
+            mLevels,
+            mLogTransform,
+            mExposureCompensation,
+            mQuadBayerOption
+        );
 
-    // Use processing thread pool to generate DNG
-    auto sharableFuture = frameDataFuture.share();
+        auto dngData = utils::generateDng(
+            *data,
+            frameMetadata,
+            containerMetadata,
+            mFps,
+            frameIndex,
+            mBaselineExpValue,
+            settings);
 
-    const auto fps = mFps;
-    const auto draftScale = mDraftScale;
-    const auto baselineExpValue = mBaselineExpValue;
-    const auto options = mOptions;
+        if(dngData && pos < dngData->size()) {
+            // Calculate length to copy
+            const size_t actualLen = std::min(len, dngData->size() - pos);
 
-    auto generateTask = [this, &cache = mCache, entry, sharableFuture, fps, draftScale, baselineExpValue, options, pos, len, dst, result]() {
-        size_t readBytes = 0;
-        int errorCode = -1;
+            std::memcpy(dst, dngData->data() + pos, actualLen);
 
-        try {
-            auto decodedFrame = sharableFuture.get();
-            auto [frameIndex, containerMetadata, frameMetadata, frameData] = std::move(decodedFrame);
-
-            spdlog::debug("Generating {}", entry.name);
-
-            RenderSettings settings(
-                options,
-                draftScale,
-                mCFRTarget,
-                mCropTarget,
-                mCameraModel,
-                mLevels,
-                mLogTransform,
-                mExposureCompensation,
-                mQuadBayerOption
-            );
-
-            auto dngData = utils::generateDng(
-                *frameData,
-                frameMetadata,
-                containerMetadata,
-                fps,
-                frameIndex,
-                baselineExpValue,
-                settings);
-
-            if(dngData && pos < dngData->size()) {
-                // Calculate length to copy
-                const size_t actualLen = std::min(len, dngData->size() - pos);
-
-                std::memcpy(dst, dngData->data() + pos, actualLen);
-
-                readBytes = actualLen;
-                errorCode = 0;
-            }
-
-            // Add to cache
-            cache.put(entry, dngData);
-        }
-        catch(std::runtime_error& e) {
-            spdlog::error("Failed to generate DNG (error: {})", e.what());
-            cache.markLoadFailed(entry);
+            readBytes = actualLen;
+            errorCode = 0;
         }
 
+        // Add to cache
+        mCache.put(entry, dngData);
+    }
+    catch(std::runtime_error& e) {
+        spdlog::error("Failed to generate DNG (error: {})", e.what());
+        mCache.markLoadFailed(entry);
+    }
+
+    if(result) {
         result(readBytes, errorCode);
+    }
 
-        return readBytes;
-    };
-
-
-    auto processFuture = mProcessingThreadPool.submit_task(generateTask);
-    if(!async)
-        return processFuture.get();
-
-    return 0;
+    return readBytes;
 }
 
 size_t VirtualFileSystemImpl_MCRAW::generateAudio(
@@ -662,7 +633,25 @@ int VirtualFileSystemImpl_MCRAW::readFile(
         return generateAudio(entry, pos, len, dst, result, async);
     }
     else if(boost::ends_with(entry.name, "dng")) {
-        return generateFrame(entry, pos, len, dst, result, async);
+        // For DNG files, always execute generateFrame in the serial queue
+        if(async) {
+            // Retain the result callback to be used in the async block
+            auto resultCopy = result;
+
+            dispatch_async(mSerialQueue, ^{
+                generateFrame(entry, pos, len, dst, resultCopy, false);
+            });
+
+            // Return immediately for async calls
+            return 0;
+        } else {
+            // For synchronous calls, use dispatch_sync to ensure execution
+            __block size_t readBytes = 0;
+            dispatch_sync(mSerialQueue, ^{
+                readBytes = generateFrame(entry, pos, len, dst, result, false);
+            });
+            return readBytes;
+        }
     }
 
     return -1;
