@@ -40,9 +40,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Render Options
     struct RenderOptions {
-        var draftScale: Int = 1
         var cfrTarget: CFRMode = .preferDropFrame
-        var cropTarget: String = ""
         var cameraModel: String = "Panasonic"
         var levels: String = "Dynamic"
         var logTransform: LogTransformMode = .keepInput
@@ -50,14 +48,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var quadBayerOption: QuadBayerMode = .remosaic
 
         // Boolean options
-        var isDraft: Bool = false
         var applyVignetteCorrection: Bool = true
         var normalizeShadingMap: Bool = true
-        var debugShadingMap: Bool = false
         var vignetteOnlyColor: Bool = false
         var normalizeExposure: Bool = false
         var framerateConversion: Bool = false
-        var cropping: Bool = false
         var camModelOverride: Bool = false
         var logTransformOption: Bool = false
         var interpretAsQuadBayer: Bool = false
@@ -65,20 +60,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         func buildOptionsString() -> String {
             var options: [String] = []
 
-            if isDraft {
-                options.append("draft=\(draftScale)")
-            }
-
             if applyVignetteCorrection {
                 options.append("vignette_correction")
             }
 
             if normalizeShadingMap {
                 options.append("normalize_shading_map")
-            }
-
-            if debugShadingMap {
-                options.append("debug_shading_map")
             }
 
             if vignetteOnlyColor {
@@ -91,10 +78,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if framerateConversion {
                 options.append("cfr=\(cfrTarget.rawValue)")
-            }
-
-            if cropping && !cropTarget.isEmpty {
-                options.append("crop=\(cropTarget)")
             }
 
             if camModelOverride && !cameraModel.isEmpty {
@@ -347,20 +330,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Use Defaults")
 
         // Create the accessory view
-        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 550))
-
-        // Draft checkbox and scale
-        let draftCheckbox = NSButton(checkboxWithTitle: "Enable Draft Mode", target: nil, action: nil)
-        draftCheckbox.frame = NSRect(x: 20, y: 520, width: 120, height: 18)
-        accessoryView.addSubview(draftCheckbox)
-
-        let draftScaleLabel = NSTextField(labelWithString: "Draft Scale:")
-        draftScaleLabel.frame = NSRect(x: 40, y: 490, width: 80, height: 20)
-        accessoryView.addSubview(draftScaleLabel)
-
-        let draftScaleField = NSTextField(frame: NSRect(x: 120, y: 490, width: 60, height: 20))
-        draftScaleField.stringValue = "1"
-        accessoryView.addSubview(draftScaleField)
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 490))
 
         // Boolean options
         let vignetteCorrectionCheckbox = NSButton(checkboxWithTitle: "Apply Vignette Correction", target: nil, action: nil)
@@ -373,43 +343,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         normalizeShadingCheckbox.state = .on
         accessoryView.addSubview(normalizeShadingCheckbox)
 
-        let debugShadingCheckbox = NSButton(checkboxWithTitle: "Debug Shading Map", target: nil, action: nil)
-        debugShadingCheckbox.frame = NSRect(x: 20, y: 410, width: 180, height: 18)
-        accessoryView.addSubview(debugShadingCheckbox)
-
         let vignetteOnlyColorCheckbox = NSButton(checkboxWithTitle: "Vignette Only Color", target: nil, action: nil)
-        vignetteOnlyColorCheckbox.frame = NSRect(x: 20, y: 385, width: 180, height: 18)
+        vignetteOnlyColorCheckbox.frame = NSRect(x: 20, y: 410, width: 180, height: 18)
         accessoryView.addSubview(vignetteOnlyColorCheckbox)
 
         let normalizeExposureCheckbox = NSButton(checkboxWithTitle: "Normalize Exposure", target: nil, action: nil)
-        normalizeExposureCheckbox.frame = NSRect(x: 20, y: 360, width: 180, height: 18)
+        normalizeExposureCheckbox.frame = NSRect(x: 20, y: 385, width: 180, height: 18)
         accessoryView.addSubview(normalizeExposureCheckbox)
 
         let framerateConversionCheckbox = NSButton(checkboxWithTitle: "Framerate Conversion", target: nil, action: nil)
-        framerateConversionCheckbox.frame = NSRect(x: 20, y: 335, width: 180, height: 18)
+        framerateConversionCheckbox.frame = NSRect(x: 20, y: 360, width: 180, height: 18)
         accessoryView.addSubview(framerateConversionCheckbox)
 
-        let croppingCheckbox = NSButton(checkboxWithTitle: "Enable Cropping", target: nil, action: nil)
-        croppingCheckbox.frame = NSRect(x: 20, y: 310, width: 120, height: 18)
-        accessoryView.addSubview(croppingCheckbox)
-
-        let cropField = NSTextField(frame: NSRect(x: 140, y: 308, width: 100, height: 22))
-        cropField.placeholderString = "e.g., 16:9"
-        accessoryView.addSubview(cropField)
-
         let camModelOverrideCheckbox = NSButton(checkboxWithTitle: "Override Camera Model", target: nil, action: nil)
-        camModelOverrideCheckbox.frame = NSRect(x: 20, y: 280, width: 180, height: 18)
+        camModelOverrideCheckbox.frame = NSRect(x: 20, y: 330, width: 180, height: 18)
         accessoryView.addSubview(camModelOverrideCheckbox)
 
-        let camModelField = NSTextField(frame: NSRect(x: 210, y: 278, width: 100, height: 22))
+        let camModelField = NSTextField(frame: NSRect(x: 210, y: 328, width: 100, height: 22))
         camModelField.stringValue = "Panasonic"
         accessoryView.addSubview(camModelField)
 
         let logTransformCheckbox = NSButton(checkboxWithTitle: "Log Transform", target: nil, action: nil)
-        logTransformCheckbox.frame = NSRect(x: 20, y: 250, width: 120, height: 18)
+        logTransformCheckbox.frame = NSRect(x: 20, y: 300, width: 120, height: 18)
         accessoryView.addSubview(logTransformCheckbox)
 
-        let logTransformPopup = NSPopUpButton(frame: NSRect(x: 140, y: 250, width: 150, height: 24))
+        let logTransformPopup = NSPopUpButton(frame: NSRect(x: 140, y: 300, width: 150, height: 24))
         logTransformPopup.addItems(withTitles: LogTransformMode.allCases.map { mode in
             switch mode {
             case .disabled: return "Disabled"
@@ -424,26 +382,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         accessoryView.addSubview(logTransformPopup)
 
         let exposureLabel = NSTextField(labelWithString: "Exposure Compensation:")
-        exposureLabel.frame = NSRect(x: 20, y: 220, width: 160, height: 20)
+        exposureLabel.frame = NSRect(x: 20, y: 270, width: 160, height: 20)
         accessoryView.addSubview(exposureLabel)
 
-        let exposureField = NSTextField(frame: NSRect(x: 180, y: 218, width: 80, height: 22))
+        let exposureField = NSTextField(frame: NSRect(x: 180, y: 268, width: 80, height: 22))
         exposureField.stringValue = "0ev"
         accessoryView.addSubview(exposureField)
 
         let levelsLabel = NSTextField(labelWithString: "Levels:")
-        levelsLabel.frame = NSRect(x: 20, y: 190, width: 80, height: 20)
+        levelsLabel.frame = NSRect(x: 20, y: 240, width: 80, height: 20)
         accessoryView.addSubview(levelsLabel)
 
-        let levelsField = NSTextField(frame: NSRect(x: 100, y: 188, width: 100, height: 22))
+        let levelsField = NSTextField(frame: NSRect(x: 100, y: 238, width: 100, height: 22))
         levelsField.stringValue = "Dynamic"
         accessoryView.addSubview(levelsField)
 
         let quadBayerCheckbox = NSButton(checkboxWithTitle: "Interpret as Quad Bayer", target: nil, action: nil)
-        quadBayerCheckbox.frame = NSRect(x: 20, y: 160, width: 180, height: 18)
+        quadBayerCheckbox.frame = NSRect(x: 20, y: 210, width: 180, height: 18)
         accessoryView.addSubview(quadBayerCheckbox)
 
-        let quadBayerPopup = NSPopUpButton(frame: NSRect(x: 210, y: 158, width: 150, height: 24))
+        let quadBayerPopup = NSPopUpButton(frame: NSRect(x: 210, y: 208, width: 150, height: 24))
         quadBayerPopup.addItems(withTitles: QuadBayerMode.allCases.map { mode in
             switch mode {
             case .remosaic: return "Remosaic"
@@ -455,10 +413,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         accessoryView.addSubview(quadBayerPopup)
 
         let cfrLabel = NSTextField(labelWithString: "CFR Target:")
-        cfrLabel.frame = NSRect(x: 20, y: 130, width: 80, height: 20)
+        cfrLabel.frame = NSRect(x: 20, y: 180, width: 80, height: 20)
         accessoryView.addSubview(cfrLabel)
 
-        let cfrPopup = NSPopUpButton(frame: NSRect(x: 100, y: 128, width: 180, height: 24))
+        let cfrPopup = NSPopUpButton(frame: NSRect(x: 100, y: 178, width: 180, height: 24))
         cfrPopup.addItems(withTitles: CFRMode.allCases.map { mode in
             switch mode {
             case .disabled: return "Disabled"
@@ -477,14 +435,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if response == .alertFirstButtonReturn {
             // Collect options
-            options.isDraft = draftCheckbox.state == .on
-            if let scaleValue = Int(draftScaleField.stringValue) {
-                options.draftScale = scaleValue
-            }
-
             options.applyVignetteCorrection = vignetteCorrectionCheckbox.state == .on
             options.normalizeShadingMap = normalizeShadingCheckbox.state == .on
-            options.debugShadingMap = debugShadingCheckbox.state == .on
             options.vignetteOnlyColor = vignetteOnlyColorCheckbox.state == .on
             options.normalizeExposure = normalizeExposureCheckbox.state == .on
             options.framerateConversion = framerateConversionCheckbox.state == .on
@@ -500,9 +452,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 default: options.cfrTarget = .preferDropFrame
                 }
             }
-
-            options.cropping = croppingCheckbox.state == .on
-            options.cropTarget = cropField.stringValue
 
             options.camModelOverride = camModelOverrideCheckbox.state == .on
             options.cameraModel = camModelField.stringValue
