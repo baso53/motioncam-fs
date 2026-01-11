@@ -1,7 +1,8 @@
 import SwiftUI
 import AppKit
 
-// Enum definitions matching Types.h
+// MARK: - Enum Definitions matching Types.h
+
 enum CFRMode: String, CaseIterable {
     case disabled = "Disabled"
     case preferInteger = "PreferInteger"
@@ -31,60 +32,229 @@ enum CameraModel: String, CaseIterable {
     case custom = "Custom"
 }
 
+// MARK: - Error Types
+
+enum UnmountError: Error, CustomStringConvertible {
+    case nonZeroExit(status: Int32, output: String)
+    case timeout(timeout: TimeInterval)
+
+    var description: String {
+        switch self {
+        case .nonZeroExit(let s, let out): return "umount failed (exit \(s)): \(out)"
+        case .timeout(let t): return "umount timed out after \(t) seconds"
+        }
+    }
+}
+
+enum MountError: Error, CustomStringConvertible {
+    case nonZeroExit(status: Int32, output: String)
+    case timeout(timeout: TimeInterval)
+
+    var description: String {
+        switch self {
+        case .nonZeroExit(let s, let out): return "Mount failed (exit \(s)): \(out)"
+        case .timeout(let t): return "mount timed out after \(t) seconds"
+        }
+    }
+}
+
+enum DirectoryError: Error {
+    case fileExistsButIsNotDirectory(path: String)
+}
+
+// MARK: - Thread-safe Results Actor
+
+actor MountResultsCollector {
+    private var results: [(String, Error?)] = []
+
+    func append(_ result: (String, Error?)) {
+        results.append(result)
+    }
+
+    func getAll() -> [(String, Error?)] {
+        results
+    }
+
+    var count: Int {
+        results.count
+    }
+}
+
+// MARK: - Async Process Execution
+
+extension Process {
+    /// Runs the process asynchronously and waits for completion with a timeout
+    func runWithTimeout(_ timeout: TimeInterval) async throws -> String {
+        let stdout = Pipe()
+        let stderr = Pipe()
+        self.standardOutput = stdout
+        self.standardError = stderr
+
+        try run()
+
+        // Wait for process with timeout using Task
+        let startTime = Date()
+        while isRunning {
+            try Task.checkCancellation()
+
+            if Date().timeIntervalSince(startTime) > timeout {
+                terminate()
+                // Wait with timeout to avoid indefinite hang
+                let terminateStartTime = Date()
+                let terminateTimeout: TimeInterval = 5.0
+                while isRunning {
+                    if Date().timeIntervalSince(terminateStartTime) > terminateTimeout {
+                        // Process didn't terminate, give up
+                        throw MountError.timeout(timeout: timeout)
+                    }
+                    try await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                }
+                throw MountError.timeout(timeout: timeout)
+            }
+
+            // Sleep in a non-blocking way
+            try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        }
+
+        // Check exit status
+        if terminationStatus != 0 {
+            let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
+            let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
+            var output = String(data: outputData, encoding: .utf8) ?? ""
+            let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+            if !errorOutput.isEmpty { output += "\n" + errorOutput }
+            throw MountError.nonZeroExit(status: terminationStatus, output: output)
+        }
+
+        let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
+        return String(data: outputData, encoding: .utf8) ?? ""
+    }
+}
+
+// MARK: - Render Options
+
+struct RenderOptions {
+    var cfrTarget: CFRMode = .preferDropFrame
+    var cameraModel: CameraModel = .disabled
+    var cameraModelCustomValue: String = ""
+    var levelsMode: LevelsMode = .dynamic
+    var levelsCustomValue: String = ""
+
+    var applyVignetteCorrection: Bool = true
+    var normalizeShadingMap: Bool = true
+    var vignetteOnlyColor: Bool = false
+
+    var cfrEnabled: Bool = false
+    var cfrMode: CFRMode = .preferDropFrame
+    var cfrCustomValue: String = ""
+
+    func buildOptionsString() -> String {
+        var options: [String] = []
+        if applyVignetteCorrection {
+            options.append("vignette_correction")
+            if normalizeShadingMap { options.append("normalize_shading_map") }
+            if vignetteOnlyColor { options.append("vignette_only_color") }
+        }
+
+        if cfrEnabled {
+            if !cfrCustomValue.isEmpty { options.append("cfr=\(cfrCustomValue)") }
+            else { options.append("cfr=\(cfrMode.rawValue)") }
+        }
+
+        if !cameraModelCustomValue.isEmpty {
+            options.append("camera_model=\(cameraModelCustomValue)")
+        } else if cameraModel != .disabled && cameraModel != .custom {
+            options.append("camera_model=\(cameraModel.rawValue)")
+        }
+
+        if !levelsCustomValue.isEmpty {
+            options.append("levels=\(levelsCustomValue)")
+        } else if levelsMode != .custom {
+            options.append("levels=\(levelsMode.rawValue)")
+        }
+
+        return options.joined(separator: ",")
+    }
+}
+
+// MARK: - Loading Progress Sheet
+
+@MainActor
+class LoadingSheet: NSWindowController {
+    private let progressIndicator: NSProgressIndicator
+    private let statusLabel: NSTextField
+    private let panel: NSPanel
+
+    init(message: String = "Mounting...") {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 80),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.title = ""
+
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
+        panel.contentView = contentView
+
+        // Progress indicator
+        let indicator = NSProgressIndicator()
+        indicator.style = .spinning
+        indicator.frame = NSRect(x: 140, y: 45, width: 20, height: 20)
+        contentView.addSubview(indicator)
+        self.progressIndicator = indicator
+
+        // Status label
+        let label = NSTextField(labelWithString: message)
+        label.alignment = .center
+        label.frame = NSRect(x: 20, y: 15, width: 260, height: 20)
+        contentView.addSubview(label)
+        self.statusLabel = label
+
+        self.panel = panel
+        super.init(window: panel)
+
+        panel.center()
+        indicator.startAnimation(nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(message: String) {
+        statusLabel.stringValue = message
+    }
+
+    func show() {
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    override func close() {
+        progressIndicator.stopAnimation(nil)
+        super.close()
+    }
+}
+
+// MARK: - Application Entry Point
+
 @main
 struct MotionCamExplorerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     var body: some Scene { }
 }
 
+// MARK: - App Delegate
+
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var didOpenFile = false
     private let commandTimeout: TimeInterval = 2
 
-    // MARK: - Render Options
-    struct RenderOptions {
-        var cfrTarget: CFRMode = .preferDropFrame
-        var cameraModel: CameraModel = .disabled
-        var cameraModelCustomValue: String = ""
-        var levelsMode: LevelsMode = .dynamic
-        var levelsCustomValue: String = ""
-
-        var applyVignetteCorrection: Bool = true
-        var normalizeShadingMap: Bool = true
-        var vignetteOnlyColor: Bool = false
-
-        var cfrEnabled: Bool = false
-        var cfrMode: CFRMode = .preferDropFrame
-        var cfrCustomValue: String = ""
-
-        func buildOptionsString() -> String {
-            var options: [String] = []
-            if applyVignetteCorrection {
-                options.append("vignette_correction")
-                if normalizeShadingMap { options.append("normalize_shading_map") }
-                if vignetteOnlyColor { options.append("vignette_only_color") }
-            }
-
-            if cfrEnabled {
-                if !cfrCustomValue.isEmpty { options.append("cfr=\(cfrCustomValue)") }
-                else { options.append("cfr=\(cfrMode.rawValue)") }
-            }
-
-            if !cameraModelCustomValue.isEmpty {
-                options.append("camera_model=\(cameraModelCustomValue)")
-            } else if cameraModel != .disabled && cameraModel != .custom {
-                options.append("camera_model=\(cameraModel.rawValue)")
-            }
-
-            if !levelsCustomValue.isEmpty {
-                options.append("levels=\(levelsCustomValue)")
-            } else if levelsMode != .custom {
-                options.append("levels=\(levelsMode.rawValue)")
-            }
-
-            return options.joined(separator: ",")
-        }
-    }
+    // MARK: - App Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !didOpenFile { showUnmountOptionsAlert() }
@@ -98,6 +268,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - UI Logic
+
     private func showRenderOptionsDialog(for fileURL: URL) -> RenderOptions? {
         var options = RenderOptions()
 
@@ -108,18 +279,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Use Defaults")
         alert.addButton(withTitle: "Cancel")
 
-        // Compact height: 340 (was 540)
         let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 340))
 
         // --- 1. Top Section: Checkboxes (Processing) ---
-        // Top-down logic: Start Y at 310
-
         let vignetteCorrectionCheckbox = NSButton(checkboxWithTitle: "Enable Vignette Correction", target: nil, action: nil)
         vignetteCorrectionCheckbox.frame = NSRect(x: 20, y: 310, width: 250, height: 18)
         vignetteCorrectionCheckbox.state = .on
         accessoryView.addSubview(vignetteCorrectionCheckbox)
 
-        // Nested options (Indented, positioned tighter)
         let normalizeShadingCheckbox = NSButton(checkboxWithTitle: "Scale data (normalize shading map)", target: nil, action: nil)
         normalizeShadingCheckbox.frame = NSRect(x: 45, y: 285, width: 280, height: 18)
         normalizeShadingCheckbox.state = .on
@@ -136,7 +303,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             @objc func handleChange(_ sender: NSButton) {
                 let on = (sender.state == .on)
                 sub1.isEnabled = on; sub2.isEnabled = on
-                // Optional: Reduce opacity to visually indicate disabled state
                 sub1.alphaValue = on ? 1.0 : 0.5
                 sub2.alphaValue = on ? 1.0 : 0.5
             }
@@ -153,7 +319,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             box.layer?.cornerRadius = 6
             box.layer?.borderWidth = 1
             box.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
-            
+
             let label = NSTextField(labelWithString: title)
             label.font = NSFont.boldSystemFont(ofSize: 12)
             label.textColor = NSColor.secondaryLabelColor
@@ -162,7 +328,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return box
         }
 
-        // --- 2. CFR Section (Y: 160) ---
+        // --- 2. CFR Section ---
         let cfrGroup = createGroup(y: 160, title: "Constant Frame Rate (CFR)")
         accessoryView.addSubview(cfrGroup)
 
@@ -171,7 +337,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         cfrModePopup.selectItem(at: 0)
         cfrGroup.addSubview(cfrModePopup)
 
-        // Custom FPS - Placed to the RIGHT of popup
         let cfrCustomContainer = NSView(frame: NSRect(x: 220, y: 5, width: 200, height: 30))
         cfrCustomContainer.isHidden = true
         cfrGroup.addSubview(cfrCustomContainer)
@@ -184,13 +349,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         cfrCustomField.stringValue = "24.00"
         cfrCustomField.placeholderString = "24.00"
         cfrCustomContainer.addSubview(cfrCustomField)
-        
+
         let cfrHint = NSTextField(labelWithString: "(e.g., 23.976)")
-        cfrHint.font = NSFont.systemFont(ofSize: 10); cfrHint.textColor = .tertiaryLabelColor
+        cfrHint.font = NSFont.systemFont(ofSize: 10)
+        cfrHint.textColor = .tertiaryLabelColor
         cfrHint.frame = NSRect(x: 100, y: 7, width: 100, height: 14)
         cfrCustomContainer.addSubview(cfrHint)
 
-        // --- 3. Levels Section (Y: 90) ---
+        // --- 3. Levels Section ---
         let levelsGroup = createGroup(y: 90, title: "White Level / Black Level")
         accessoryView.addSubview(levelsGroup)
 
@@ -202,13 +368,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let levelsCustomContainer = NSView(frame: NSRect(x: 220, y: 5, width: 240, height: 30))
         levelsCustomContainer.isHidden = true
         levelsGroup.addSubview(levelsCustomContainer)
-        
+
         let levelsCustomField = NSTextField(frame: NSRect(x: 0, y: 4, width: 100, height: 21))
         levelsCustomField.placeholderString = "16383/1024"
         levelsCustomField.stringValue = "16383/1024"
         levelsCustomContainer.addSubview(levelsCustomField)
 
-        // --- 4. Camera Model Section (Y: 20) ---
+        // --- 4. Camera Model Section ---
         let camGroup = createGroup(y: 20, title: "Override Camera Model")
         accessoryView.addSubview(camGroup)
 
@@ -228,33 +394,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // --- Visibility Handlers ---
         class VisibilityHandler: NSObject {
             let targetView: NSView
-            let triggerIndex: Int?       // Use index (for CFR)
-            let triggerTitle: String?    // Or use title (for others)
-            
+            let triggerIndex: Int?
+            let triggerTitle: String?
+
             init(view: NSView, index: Int? = nil, title: String? = nil) {
-                self.targetView = view; self.triggerIndex = index; self.triggerTitle = title
+                self.targetView = view
+                self.triggerIndex = index
+                self.triggerTitle = title
             }
+
             @objc func handleChange(_ sender: NSPopUpButton) {
-                if let idx = triggerIndex { targetView.isHidden = (sender.indexOfSelectedItem != idx) }
-                else if let title = triggerTitle { targetView.isHidden = (sender.selectedItem?.title != title) }
+                if let idx = triggerIndex {
+                    targetView.isHidden = (sender.indexOfSelectedItem != idx)
+                } else if let title = triggerTitle {
+                    targetView.isHidden = (sender.selectedItem?.title != title)
+                }
             }
         }
 
         let cfrHandler = VisibilityHandler(view: cfrCustomContainer, index: 5)
-        cfrModePopup.target = cfrHandler; cfrModePopup.action = #selector(VisibilityHandler.handleChange(_:))
+        cfrModePopup.target = cfrHandler
+        cfrModePopup.action = #selector(VisibilityHandler.handleChange(_:))
 
         let levelsHandler = VisibilityHandler(view: levelsCustomContainer, title: "Custom")
-        levelsModePopup.target = levelsHandler; levelsModePopup.action = #selector(VisibilityHandler.handleChange(_:))
+        levelsModePopup.target = levelsHandler
+        levelsModePopup.action = #selector(VisibilityHandler.handleChange(_:))
 
         let camHandler = VisibilityHandler(view: camCustomContainer, title: "Custom")
-        camModelPopup.target = camHandler; camModelPopup.action = #selector(VisibilityHandler.handleChange(_:))
+        camModelPopup.target = camHandler
+        camModelPopup.action = #selector(VisibilityHandler.handleChange(_:))
 
         alert.accessoryView = accessoryView
 
         // --- Response Handling ---
         let response = alert.runModal()
         if response == .alertThirdButtonReturn {
-            // Cancel - go back to mount options
             return nil
         }
         if response == .alertFirstButtonReturn {
@@ -267,8 +441,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if selCFR > 0 {
                 options.cfrEnabled = true
                 if selCFR == 5 { // Custom
-                     let val = cfrCustomField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                     options.cfrCustomValue = (Double(val) != nil) ? val : "24.00"
+                    let val = cfrCustomField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    options.cfrCustomValue = (Double(val) != nil) ? val : "24.00"
                 } else {
                     let modes: [CFRMode] = [.disabled, .preferInteger, .preferDropFrame, .medianSlowMotion, .averageTesting, .disabled]
                     options.cfrMode = modes[selCFR]
@@ -301,17 +475,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func showRenderOptionsDialogLoop(for fileURL: URL) {
         while true {
             if let options = showRenderOptionsDialog(for: fileURL) {
-                try? mountSingleFile(at: fileURL, with: options)
-                showAlertAndExit(message: "✅ Mounted with custom options.")
-            } else {
-                // User cancelled - go back to mount options
-                showMountOptionsAlert(for: fileURL)
-                return
+                Task { @MainActor in
+                    do {
+                        try await mountSingleFile(at: fileURL, with: options)
+                        showAlertAndExit(message: "✅ Mounted successfully.")
+                    } catch {
+                        showAlertAndExit(message: "❌ Mount failed: \(error)")
+                    }
+                }
             }
+            return
         }
     }
 
-    // MARK: - Rest of the File (Unchanged Logic)
+    // MARK: - Alert Dialogs
+
     private func showUnmountOptionsAlert() {
         let alert = NSAlert()
         alert.messageText = "No file was opened at launch."
@@ -321,82 +499,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            let results = unmountAllMcraws()
-            let failures = results.filter { entry in
-                guard let err = entry.error else { return false }
-                if let unErr = err as? UnmountError,
-                   case .nonZeroExit(_, let output) = unErr,
-                   output.contains("not currently mounted") { return false }
-                return true
+            Task {
+                await performUnmountAll()
             }
-            if failures.isEmpty {
-                showAlertAndExit(message: "✅ Unmounted all \(results.count) mounts successfully.")
-            } else {
-                showAlertAndExit(message: "Unmounted \(results.count - failures.count)/\(results.count) successfully.")
-            }
-        default: exit(EXIT_FAILURE)
+        default:
+            exit(EXIT_FAILURE)
         }
     }
 
-    enum UnmountError: Error, CustomStringConvertible {
-        case nonZeroExit(status: Int32, output: String)
-        case timeout(timeout: TimeInterval)
-        var description: String {
-            switch self {
-            case .nonZeroExit(let s, let out): return "umount failed (exit \(s)): \(out)"
-            case .timeout(let t): return "umount timed out after \(t) seconds"
-            }
+    private func performUnmountAll() async {
+        let results = await unmountAllMcraws()
+        let failures = results.filter { entry in
+            guard let err = entry.error else { return false }
+            if let unErr = err as? UnmountError,
+               case .nonZeroExit(_, let output) = unErr,
+               output.contains("not currently mounted") { return false }
+            return true
         }
-    }
 
-    private func unmountAllMcraws() -> [(mountPoint: String, error: Error?)] {
-        let container = "/tmp/mcraws"
-        let fm = FileManager.default
-        var results = [(mountPoint: String, error: Error?)]()
-        let resultsLock = NSLock()
-        let group = DispatchGroup()
-        let semaphore = DispatchSemaphore(value: 10)
-
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: container, isDirectory: &isDir), isDir.boolValue,
-              let subdirs = try? fm.contentsOfDirectory(atPath: container) else { return results }
-
-        for name in subdirs {
-            let mp = container + "/" + name
-            group.enter()
-            semaphore.wait()
-            DispatchQueue.global().async {
-                defer { semaphore.signal(); group.leave() }
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/sbin/umount")
-                proc.arguments = ["-f", mp]
-                let outPipe = Pipe()
-                proc.standardOutput = outPipe; proc.standardError = outPipe
-                
-                var errorOccurred: Error?
-                do {
-                    try proc.run()
-                    let start = Date()
-                    while proc.isRunning && Date().timeIntervalSince(start) < self.commandTimeout {
-                        Thread.sleep(forTimeInterval: 0.1)
-                    }
-                    if proc.isRunning {
-                        proc.terminate(); proc.waitUntilExit()
-                        errorOccurred = UnmountError.timeout(timeout: self.commandTimeout)
-                    } else if proc.terminationStatus != 0 {
-                        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-                        errorOccurred = UnmountError.nonZeroExit(status: proc.terminationStatus, output: String(data: data, encoding: .utf8) ?? "")
-                    }
-                } catch { errorOccurred = error }
-
-                resultsLock.lock()
-                results.append((mountPoint: mp, error: errorOccurred))
-                resultsLock.unlock()
-            }
+        let message: String
+        if failures.isEmpty {
+            message = "✅ Unmounted all \(results.count) mounts successfully."
+        } else {
+            message = "Unmounted \(results.count - failures.count)/\(results.count) successfully."
         }
-        group.wait()
-        try? fm.removeItem(atPath: container)
-        return results
+        showAlertAndExit(message: message)
     }
 
     private func showAlertAndExit(message: String) -> Never {
@@ -413,7 +540,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             disableAlert.messageText = "Please enable the MotionCamFuse filesystem and try again."
             disableAlert.addButton(withTitle: "OK")
             _ = disableAlert.runModal()
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.fskit.fsmodule")!)
+            NSWorkspace.shared.open("x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.fskit.fsmodule")
             exit(EXIT_FAILURE)
         }
     }
@@ -429,17 +556,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            try? mountSingleFile(at: fileURL)
-            showAlertAndExit(message: "✅ Mounted successfully.")
+            Task { @MainActor in
+                do {
+                    try await mountSingleFile(at: fileURL)
+                    showAlertAndExit(message: "✅ Mounted successfully.")
+                } catch {
+                    showAlertAndExit(message: "❌ Mount failed: \(error)")
+                }
+            }
         case .alertSecondButtonReturn:
             mountAllFiles(in: fileURL.deletingLastPathComponent())
         case .alertThirdButtonReturn:
             showRenderOptionsDialogLoop(for: fileURL)
-        default: exit(EXIT_FAILURE)
+        default:
+            exit(EXIT_FAILURE)
         }
     }
 
-    enum DirectoryError: Error { case fileExistsButIsNotDirectory(path: String) }
+    private func showMultipleFilesAlert(for urls: [URL]) {
+        let alert = NSAlert()
+        alert.messageText = "Mount \(urls.count) files?"
+        alert.informativeText = "Selected files will be mounted with default settings."
+        alert.addButton(withTitle: "Mount")
+        alert.addButton(withTitle: "Mount with Options")
+        alert.addButton(withTitle: "Cancel")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            Task { await mountMultipleFiles(urls) }
+        case .alertSecondButtonReturn:
+            let options = showRenderOptionsDialog(for: urls[0])
+            if let options = options {
+                Task { await mountMultipleFiles(urls, with: options) }
+            }
+        default:
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    // MARK: - File System Operations
 
     private func ensureDirectoryExists(at path: String) throws {
         let fm = FileManager.default
@@ -459,125 +614,207 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return volumePath
     }
 
-    enum MountError: Error, CustomStringConvertible {
-        case nonZeroExit(status: Int32, output: String)
-        case timeout(timeout: TimeInterval)
-        var description: String {
-            switch self {
-            case .nonZeroExit(let s, let out): return "Mount failed (exit \(s)): \(out)"
-            case .timeout(let t): return "mount timed out after \(t) seconds"
-            }
-        }
-    }
+    // MARK: - Mount Operations (Async)
 
-    private func mountMyFS(fileUrl: URL, at mountPoint: String, options: RenderOptions? = nil) throws {
+    private func mountMyFS(fileUrl: URL, at mountPoint: String, options: RenderOptions? = nil) async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/sbin/mount")
         var arguments: [String] = ["-F", "-t", "mcrawfs"]
         if let options = options {
             let optionsString = options.buildOptionsString()
-            if !optionsString.isEmpty { arguments.append("-o"); arguments.append(optionsString) }
+            if !optionsString.isEmpty {
+                arguments.append("-o")
+                arguments.append(optionsString)
+            }
         }
         arguments.append(fileUrl.path)
         arguments.append(mountPoint)
         process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe; process.standardError = pipe
 
-        try process.run()
-        let start = Date()
-        while process.isRunning && Date().timeIntervalSince(start) < commandTimeout { Thread.sleep(forTimeInterval: 0.1) }
-        
-        if process.isRunning {
-            process.terminate(); process.waitUntilExit()
-            try? FileManager.default.removeItem(atPath: mountPoint)
-            throw MountError.timeout(timeout: commandTimeout)
-        }
-        if process.terminationStatus != 0 {
-            try? FileManager.default.removeItem(atPath: mountPoint)
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            throw MountError.nonZeroExit(status: process.terminationStatus, output: String(data: data, encoding: .utf8) ?? "")
-        }
-    }
-
-    private func mountSingleFile(at url: URL, with options: RenderOptions? = nil) throws {
-        let mountPoint = try volumeMountPoint(for: url)
-        try mountMyFS(fileUrl: url, at: mountPoint, options: options)
-    }
-
-    private func showMultipleFilesAlert(for urls: [URL]) {
-        let alert = NSAlert()
-        alert.messageText = "Mount \(urls.count) files?"
-        alert.informativeText = "Selected files will be mounted with default settings."
-        alert.addButton(withTitle: "Mount")
-        alert.addButton(withTitle: "Mount with Options")
-        alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn: mountMultipleFiles(urls)
-        case .alertSecondButtonReturn:
-            // Use first file as reference for options dialog
-            let options = showRenderOptionsDialog(for: urls[0])
-            if let options = options {
-                mountMultipleFiles(urls, with: options)
-            }
-        default: exit(EXIT_FAILURE)
-        }
-    }
-
-    private func mountMultipleFiles(_ urls: [URL], with options: RenderOptions? = nil) {
-        let mcrawFiles = urls.filter { $0.pathExtension.lowercased() == "mcraw" }
-        guard !mcrawFiles.isEmpty else { showAlertAndExit(message: "⚠️ No .mcraw files found.") }
-
-        var results = [(file: URL, error: Error?)]()
-        let resultsLock = NSLock()
-        let group = DispatchGroup()
-        let semaphore = DispatchSemaphore(value: 10)
-
-        // First one synchronous to catch file system errors
         do {
-            try mountSingleFile(at: mcrawFiles[0], with: options)
-            results.append((mcrawFiles[0], nil))
+            _ = try await process.runWithTimeout(commandTimeout)
         } catch {
-            if let mountError = error as? MountError { handleDisabledError(mountError) }
-            results.append((mcrawFiles[0], error))
+            // Clean up the mount point directory, report any cleanup failure
+            do {
+                try FileManager.default.removeItem(atPath: mountPoint)
+            } catch let cleanupError {
+                print("⚠️ Failed to clean up mount point '\(mountPoint)': \(cleanupError)")
+            }
+            throw error
+        }
+    }
+
+    private func mountSingleFile(at url: URL, with options: RenderOptions? = nil, showLoading: Bool = true) async throws {
+        let loadingSheet = showLoading ? LoadingSheet(message: "Mounting \(url.lastPathComponent)...") : nil
+        loadingSheet?.show()
+
+        defer { loadingSheet?.close() }
+
+        let mountPoint = try volumeMountPoint(for: url)
+        try await mountMyFS(fileUrl: url, at: mountPoint, options: options)
+    }
+
+    private func unmountSingleMountPoint(_ mountPoint: String) async -> (String, Error?) {
+        do {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/sbin/umount")
+            process.arguments = ["-f", mountPoint]
+            _ = try await process.runWithTimeout(commandTimeout)
+            return (mountPoint, nil)
+        } catch {
+            return (mountPoint, error)
+        }
+    }
+
+    private func unmountAllMcraws() async -> [(mountPoint: String, error: Error?)] {
+        let container = "/tmp/mcraws"
+        let fm = FileManager.default
+        let collector = MountResultsCollector()
+
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: container, isDirectory: &isDir), isDir.boolValue,
+              let subdirs = try? fm.contentsOfDirectory(atPath: container) else {
+            return []
         }
 
-        for file in mcrawFiles.dropFirst() {
-            group.enter()
-            semaphore.wait()
-            DispatchQueue.global().async {
-                defer { semaphore.signal(); group.leave() }
-                do {
-                    try self.mountSingleFile(at: file, with: options)
-                    resultsLock.lock(); results.append((file, nil)); resultsLock.unlock()
-                } catch {
-                    resultsLock.lock(); results.append((file, error)); resultsLock.unlock()
+        // Use TaskGroup for concurrent unmounting with controlled parallelism
+        await withTaskGroup(of: (String, Error?).self) { group in
+            var activeTasks = 0
+            let maxConcurrentTasks = 10
+
+            for name in subdirs {
+                // Limit concurrency
+                if activeTasks >= maxConcurrentTasks {
+                    if let result = await group.next() {
+                        await collector.append(result)
+                        activeTasks -= 1
+                    }
+                }
+
+                let mp = container + "/" + name
+                activeTasks += 1
+                group.addTask {
+                    await self.unmountSingleMountPoint(mp)
                 }
             }
-        }
-        group.wait()
 
-        let failures = results.filter { $0.error != nil }
-        if failures.isEmpty {
+            // Collect remaining results
+            for await result in group {
+                await collector.append(result)
+            }
+        }
+
+        // Clean up the container directory, report any failure
+        do {
+            try fm.removeItem(atPath: container)
+        } catch let cleanupError {
+            print("⚠️ Failed to remove container directory '\(container)': \(cleanupError)")
+        }
+        return await collector.getAll()
+    }
+
+    private func mountMultipleFiles(_ urls: [URL], with options: RenderOptions? = nil) async {
+        let mcrawFiles = urls.filter { $0.pathExtension.lowercased() == "mcraw" }
+        guard !mcrawFiles.isEmpty else {
+            showAlertAndExit(message: "⚠️ No .mcraw files found.")
+            return
+        }
+
+        let loadingSheet = LoadingSheet(message: "Mounting 1 of \(mcrawFiles.count)...")
+        loadingSheet.show()
+
+        defer { loadingSheet.close() }
+
+        let collector = MountResultsCollector()
+        var completedCount = 0
+
+        // First file is done synchronously to catch filesystem errors early
+        do {
+            try await mountSingleFile(at: mcrawFiles[0], with: options, showLoading: false)
+            await collector.append((mcrawFiles[0].path, nil))
+        } catch {
+            if let mountError = error as? MountError {
+                handleDisabledError(mountError)
+            }
+            await collector.append((mcrawFiles[0].path, error))
+        }
+        completedCount += 1
+        loadingSheet.update(message: "Mounting \(completedCount) of \(mcrawFiles.count)...")
+
+        // Use TaskGroup for concurrent mounting with controlled parallelism
+        await withTaskGroup(of: (String, Error?).self) { group in
+            var activeTasks = 0
+            let maxConcurrentTasks = 10
+
+            for file in mcrawFiles.dropFirst() {
+                // Limit concurrency
+                if activeTasks >= maxConcurrentTasks {
+                    if let result = await group.next() {
+                        await collector.append(result)
+                        activeTasks -= 1
+                        completedCount += 1
+                        loadingSheet.update(message: "Mounting \(completedCount) of \(mcrawFiles.count)...")
+                    }
+                }
+
+                activeTasks += 1
+                group.addTask {
+                    do {
+                        try await self.mountSingleFile(at: file, with: options, showLoading: false)
+                        return (file.path, nil)
+                    } catch {
+                        return (file.path, error)
+                    }
+                }
+            }
+
+            // Collect remaining results
+            for await result in group {
+                await collector.append(result)
+                completedCount += 1
+                loadingSheet.update(message: "Mounting \(completedCount) of \(mcrawFiles.count)...")
+            }
+        }
+
+        let results = await collector.getAll()
+        let failures = results.filter { $0.1 != nil }
+        let successCount = results.count - failures.count
+
+        // Only open folder if at least one mount succeeded
+        if successCount > 0 {
             NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/mcraws"))
+        }
+
+        // Bring app to front before showing alert
+        NSApp.activate(ignoringOtherApps: true)
+
+        if failures.isEmpty {
             showAlertAndExit(message: "✅ All \(results.count) images mounted successfully.")
         } else {
-            NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/mcraws"))
-            showAlertAndExit(message: "Mounted \(results.count - failures.count)/\(results.count) successfully.")
+            showAlertAndExit(message: "Mounted \(successCount)/\(results.count) successfully.")
         }
     }
 
     private func mountAllFiles(in folderURL: URL) {
         let fm = FileManager.default
         let mcrawFiles: [URL]
+
         do {
             let items = try fm.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
             mcrawFiles = try items.filter { url in
                 let props = try url.resourceValues(forKeys: [.isDirectoryKey])
                 return (props.isDirectory == false) && url.pathExtension.lowercased() == "mcraw"
             }
-        } catch { showAlertAndExit(message: "❌ Error reading folder: \(error)") }
-        guard !mcrawFiles.isEmpty else { showAlertAndExit(message: "⚠️ No .mcraw files found.") }
-        mountMultipleFiles(mcrawFiles)
+        } catch {
+            showAlertAndExit(message: "❌ Error reading folder: \(error)")
+            return
+        }
+
+        guard !mcrawFiles.isEmpty else {
+            showAlertAndExit(message: "⚠️ No .mcraw files found.")
+            return
+        }
+
+        Task { await mountMultipleFiles(mcrawFiles) }
     }
 }
