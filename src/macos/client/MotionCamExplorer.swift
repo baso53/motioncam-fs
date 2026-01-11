@@ -307,7 +307,20 @@ struct MotionCamExplorerApp: App {
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var didOpenFile = false
-    private let commandTimeout: TimeInterval = 2
+
+    private nonisolated func commandTimeout(for fileURL: URL) -> TimeInterval {
+        let fm = FileManager.default
+        guard let attributes = try? fm.attributesOfItem(atPath: fileURL.path),
+              let fileSize = attributes[.size] as? UInt64 else {
+            return 10.0 // Default timeout if we can't get file size
+        }
+
+        let gigabytes = Double(fileSize) / (1024 * 1024 * 1024)
+        let timeout = gigabytes * 2.5
+
+        // Minimum timeout of 2 seconds
+        return max(timeout, 2.0)
+    }
 
     // MARK: - App Lifecycle
 
@@ -733,7 +746,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         process.arguments = arguments
 
         do {
-            _ = try await process.runWithTimeout(commandTimeout)
+            _ = try await process.runWithTimeout(commandTimeout(for: fileUrl))
         } catch {
             // Clean up the mount point directory, report any cleanup failure
             do {
@@ -760,7 +773,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/sbin/umount")
             process.arguments = ["-f", mountPoint]
-            _ = try await process.runWithTimeout(commandTimeout)
+            _ = try await process.runWithTimeout(2.0)
             return (mountPoint, nil)
         } catch {
             return (mountPoint, error)
