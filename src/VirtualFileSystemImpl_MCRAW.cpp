@@ -13,6 +13,8 @@
 #include <sstream>
 #include <tuple>
 
+#include <os/log.h>
+
 namespace motioncam {
 
 namespace {
@@ -223,14 +225,26 @@ VirtualFileSystemImpl_MCRAW::VirtualFileSystemImpl_MCRAW(const std::string& file
 }
 
 void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
+        os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT,
+            "[MCRAW] init | options=%d | draftScale=%d | cfrMode=%d | cfrCustom=%.2f | crop=%{public}s | cameraModel=%{public}s | levels=%{public}s | logTransform=%d | exposure=%{public}s | quadBayer=%d",
+            (int)options, // Ensure this is castable to int
+            mDraftScale,
+            (int)mCFRTarget.mode,
+            mCFRTarget.customValue,
+            mCropTarget.c_str(),
+            mCameraModel.c_str(),
+            mLevels.c_str(),
+            (int)mLogTransform,
+            mExposureCompensation.c_str(),
+            (int)mQuadBayerOption
+        );
+
     Decoder decoder(mSrcPath);
     auto frames = decoder.getFrames();
     std::sort(frames.begin(), frames.end());
 
     if(frames.empty())
         return;
-
-    // spdlog::debug("VirtualFileSystemImpl_MCRAW::init(options={})", optionsToString(options));
 
     // Clear everything
     mFiles.clear();
@@ -444,9 +458,8 @@ void VirtualFileSystemImpl_MCRAW::init(FileRenderOptions options) {
 
     generateFrameHolder = std::make_unique<motioncam::GenerateFrameHolder>(
         mSrcPath,
-        FileRenderOptions::RENDER_OPT_NONE,
-        mFps,
-        mDraftScale
+        settingsForInit,
+        mFps
     );
 }
 
@@ -465,14 +478,12 @@ std::optional<Entry> VirtualFileSystemImpl_MCRAW::findEntry(const std::string& f
 }
 
 GenerateFrameHolder::GenerateFrameHolder(
-                                         const std::string& srcPath,
-                                         FileRenderOptions options,
-                                         float fps,
-                                         int draftScale)
+    const std::string& srcPath,
+    const RenderSettings& settings,
+    float fps)
 : mSrcPath(srcPath)
-, mOptions(options)
+, mRenderSettings(settings)
 , mFps(fps)
-, mDraftScale(draftScale)
 , sSharedDecoder(std::make_unique<Decoder>(srcPath))
 {
     mLastAddToCacheTimestamp = std::chrono::system_clock::now();
@@ -511,7 +522,7 @@ size_t GenerateFrameHolder::generateFrame(
     try {
         auto timestamp = std::get<Timestamp>(entry.userData);
 
-        // spdlog::debug("Reading frame {} with options {}", timestamp, optionsToString(mOptions));
+        // spdlog::debug("Reading frame {} with options {}", timestamp, optionsToString(mRenderSettings.options));
         auto data = std::make_shared<std::vector<uint8_t>>();
         nlohmann::json metadata;
         auto allFrames = sSharedDecoder->getFrames();
@@ -545,18 +556,6 @@ size_t GenerateFrameHolder::generateFrame(
 
     // spdlog::debug("Generating {}", entry.name);
 
-    RenderSettings settings(
-        mOptions,
-        mDraftScale,
-        CFRTarget(CFRMode::PreferDropFrame),
-        "",
-        "",
-        "",
-        LogTransformMode::Disabled,
-        "",
-        QuadBayerMode::Remosaic
-    );
-
     try {
         auto dngData = utils::generateDng(
             *frameData,
@@ -565,7 +564,7 @@ size_t GenerateFrameHolder::generateFrame(
             mFps,
             frameIndex,
             0.0,  // baselineExpValue - using 0.0 as default
-            settings);
+            mRenderSettings);
 
         if(dngData && pos < dngData->size()) {
             const size_t actualLen = std::min(len, dngData->size() - pos);

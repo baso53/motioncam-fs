@@ -32,26 +32,6 @@ final class McrawFSVolume: FSVolume {
         }
     }
 
-    private func convertLogTransformEnumToString(_ enumValue: String) -> String {
-        switch enumValue {
-        case "KeepInput": return "Keep Input"
-        case "ReduceBy2Bit": return "Reduce by 2bit"
-        case "ReduceBy4Bit": return "Reduce by 4bit"
-        case "ReduceBy6Bit": return "Reduce by 6bit"
-        case "ReduceBy8Bit": return "Reduce by 8bit"
-        case "": return ""
-        default: return "Keep Input"
-        }
-    }
-
-    private func convertQuadBayerEnumToString(_ enumValue: String) -> String {
-        switch enumValue {
-        case "WrongCFAMetadata": return "Wrong CFA Metadata"
-        case "CorrectQBCFAMetadata": return "Correct QBCFA Metadata"
-        default: return "Remosaic"
-        }
-    }
-
     init(resource: FSPathURLResource) {
         let fileName = resource.url.deletingPathExtension().lastPathComponent
 
@@ -136,14 +116,9 @@ extension McrawFSVolume: FSVolume.Operations {
 
         // Parse render settings from taskOptions
         var renderOptions: motioncam.FileRenderOptions = motioncam.RENDER_OPT_NONE
-        var draftScale: Int32 = 1
-        var cfrTarget = "PreferDropFrame"  // Changed from "Prefer Drop Frame" to enum value
-        var cropTarget = ""
-        var cameraModel = "Panasonic"
-        var levels = "Dynamic"
-        var logTransform = "KeepInput"  // Changed from "Keep Input" to enum value
-        var exposureCompensation = "0ev"
-        var quadBayerOption = "Remosaic"
+        var cfrTarget = ""
+        var cameraModel = ""
+        var levels = ""
 
         // Parse taskOptions array
         var i = 0
@@ -158,24 +133,11 @@ extension McrawFSVolume: FSVolume.Operations {
                         renderOptions = renderOptions |  motioncam.RENDER_OPT_APPLY_VIGNETTE_CORRECTION
                     } else if optionStr == "normalize_shading_map" {
                         renderOptions = renderOptions |  motioncam.RENDER_OPT_NORMALIZE_SHADING_MAP
-                    } else if optionStr == "debug_shading_map" {
-                        renderOptions = renderOptions |  motioncam.RENDER_OPT_DEBUG_SHADING_MAP
                     } else if optionStr == "vignette_only_color" {
                         renderOptions = renderOptions |  motioncam.RENDER_OPT_VIGNETTE_ONLY_COLOR
-                    } else if optionStr == "normalize_exposure" {
-                        renderOptions = renderOptions |  motioncam.RENDER_OPT_NORMALIZE_EXPOSURE
-                    } else if optionStr.hasPrefix("draft=") {
-                        let value = optionStr.dropFirst(6)
-                        draftScale = Int32(value) ?? 1
-                        renderOptions = renderOptions |  motioncam.RENDER_OPT_DRAFT
                     } else if optionStr.hasPrefix("cfr=") {
                         cfrTarget = String(optionStr.dropFirst(4))
                         renderOptions = renderOptions |  motioncam.RENDER_OPT_FRAMERATE_CONVERSION
-                    } else if optionStr.hasPrefix("crop=") {
-                        cropTarget = String(optionStr.dropFirst(5))
-                        if !cropTarget.isEmpty {
-                            renderOptions = renderOptions |  motioncam.RENDER_OPT_CROPPING
-                        }
                     } else if optionStr.hasPrefix("camera_model=") {
                         cameraModel = String(optionStr.dropFirst(13))
                         if !cameraModel.isEmpty {
@@ -183,14 +145,6 @@ extension McrawFSVolume: FSVolume.Operations {
                         }
                     } else if optionStr.hasPrefix("levels=") {
                         levels = String(optionStr.dropFirst(7))
-                    } else if optionStr.hasPrefix("log_transform=") {
-                        logTransform = String(optionStr.dropFirst(14))
-                        renderOptions = renderOptions |  motioncam.RENDER_OPT_LOG_TRANSFORM
-                    } else if optionStr.hasPrefix("exposure=") {
-                        exposureCompensation = String(optionStr.dropFirst(9))
-                    } else if optionStr.hasPrefix("quad_bayer=") {
-                        quadBayerOption = String(optionStr.dropFirst(11))
-                        renderOptions = renderOptions |  motioncam.RENDER_OPT_INTERPRET_AS_QUAD_BAYER
                     }
                 }
                 i += 2
@@ -199,17 +153,48 @@ extension McrawFSVolume: FSVolume.Operations {
             }
         }
 
+        // Convert cfrTarget string to CFRMode enum
+        let cfrMode: motioncam.CFRMode
+        let cfrValue: Float
+
+        if let cfrDouble = Float(cfrTarget) {
+            // Custom numeric value
+            cfrMode = .Custom
+            cfrValue = cfrDouble
+        } else {
+            switch cfrTarget {
+            case "Disabled":
+                cfrMode = .Disabled
+                cfrValue = 0.0
+            case "PreferInteger":
+                cfrMode = .PreferInteger
+                cfrValue = 0.0
+            case "PreferDropFrame":
+                cfrMode = .PreferDropFrame
+                cfrValue = 0.0
+            case "MedianSlowMotion":
+                cfrMode = .MedianSlowMotion
+                cfrValue = 0.0
+            case "AverageTesting":
+                cfrMode = .AverageTesting
+                cfrValue = 0.0
+            default:
+                cfrMode = .Disabled
+                cfrValue = 0.0
+            }
+        }
+
         // Create render settings with converted enum values
         let renderSettings = motioncam.RenderSettings(
             renderOptions,
-            draftScale,
-            std.string(convertCFREnumToString(cfrTarget)),
-            std.string(cropTarget),
+            0,
+            motioncam.CFRTarget.init(cfrMode, cfrValue),
+            std.string(""),
             std.string(cameraModel),
             std.string(levels),
-            std.string(convertLogTransformEnumToString(logTransform)),
-            std.string(exposureCompensation),
-            std.string(convertQuadBayerEnumToString(quadBayerOption))
+            motioncam.LogTransformMode.Disabled,
+            std.string(""),
+            motioncam.QuadBayerMode.Remosaic
         )
         
         self.renderSettings = renderSettings

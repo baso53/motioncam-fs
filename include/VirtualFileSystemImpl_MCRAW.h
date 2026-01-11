@@ -18,9 +18,8 @@ class GenerateFrameHolder {
 public:
 GenerateFrameHolder(
     const std::string& srcPath,
-    FileRenderOptions options,
-    float fps,
-    int draftScale);
+    const RenderSettings& settings,
+    float fps);
 
 size_t generateFrame(
     const Entry& entry,
@@ -29,14 +28,13 @@ size_t generateFrame(
     void* dst,
     std::function<void(size_t, int)> result,
     bool async);
-    
+
 void clearCache();
 
 private:
     const std::string          mSrcPath;
-    const FileRenderOptions    mOptions;
-    float                mFps;
-    int                  mDraftScale;
+    RenderSettings             mRenderSettings;
+    float                      mFps;
 
     std::unique_ptr<Decoder>   sSharedDecoder;
     std::deque<CacheEntry>     mCache;
