@@ -3,7 +3,7 @@ import AppKit
 
 // MARK: - Enum Definitions matching Types.h
 
-enum CFRMode: String, CaseIterable {
+enum CFRMode: String, CaseIterable, Codable {
     case disabled = "Disabled"
     case preferInteger = "PreferInteger"
     case preferDropFrame = "PreferDropFrame"
@@ -11,7 +11,7 @@ enum CFRMode: String, CaseIterable {
     case averageTesting = "AverageTesting"
 }
 
-enum LevelsMode: String, CaseIterable {
+enum LevelsMode: String, CaseIterable, Codable {
     case dynamic = "Dynamic"
     case originalStatic = "Original (Static)"
     case custom1023_64 = "1023/64"
@@ -24,7 +24,7 @@ enum LevelsMode: String, CaseIterable {
     case custom = "Custom"
 }
 
-enum CameraModel: String, CaseIterable {
+enum CameraModel: String, CaseIterable, Codable {
     case disabled = "Disabled"
     case panasonic = "Panasonic"
     case blackmagic = "Blackmagic"
@@ -133,7 +133,7 @@ extension Process {
 
 // MARK: - Render Options
 
-struct RenderOptions {
+struct RenderOptions: Codable {
     var cfrTarget: CFRMode = .preferDropFrame
     var cameraModel: CameraModel = .disabled
     var cameraModelCustomValue: String = ""
@@ -147,6 +147,61 @@ struct RenderOptions {
     var cfrEnabled: Bool = false
     var cfrMode: CFRMode = .preferDropFrame
     var cfrCustomValue: String = ""
+
+    // MARK: - UserDefaults
+
+    private static let key = "savedRenderOptions"
+
+    static func save(_ options: RenderOptions) {
+        if let data = try? JSONEncoder().encode(options) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
+    static func load() -> RenderOptions {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let options = try? JSONDecoder().decode(RenderOptions.self, from: data) else {
+            return RenderOptions()
+        }
+        return options
+    }
+
+    func descriptionText() -> String {
+        var parts: [String] = []
+
+        if applyVignetteCorrection {
+            parts.append("Vignette correction")
+            if normalizeShadingMap { parts.append("  - Normalize shading map") }
+            if vignetteOnlyColor { parts.append("  - Color correction only") }
+        }
+
+        if cfrEnabled {
+            if !cfrCustomValue.isEmpty {
+                parts.append("CFR: \(cfrCustomValue)")
+            } else {
+                parts.append("CFR: \(cfrMode.rawValue)")
+            }
+        }
+
+        if cameraModel != .disabled {
+            if !cameraModelCustomValue.isEmpty {
+                parts.append("Camera model: \(cameraModelCustomValue)")
+            } else {
+                parts.append("Camera model: \(cameraModel.rawValue)")
+            }
+        }
+
+        if !levelsCustomValue.isEmpty {
+            parts.append("Levels: \(levelsCustomValue)")
+        } else if levelsMode != .dynamic {
+            parts.append("Levels: \(levelsMode.rawValue)")
+        }
+
+        if parts.isEmpty {
+            return "Default settings"
+        }
+        return parts.joined(separator: "\n")
+    }
 
     func buildOptionsString() -> String {
         var options: [String] = []
@@ -269,31 +324,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - UI Logic
 
-    private func showRenderOptionsDialog(for fileURL: URL) -> RenderOptions? {
-        var options = RenderOptions()
+    private func showRenderOptionsDialog(for fileURL: URL, loadSaved: Bool = false) -> RenderOptions? {
+        let options: RenderOptions
+        if loadSaved {
+            options = RenderOptions.load()
+        } else {
+            options = RenderOptions()
+        }
 
         let alert = NSAlert()
-        alert.messageText = "Render Options"
-        alert.informativeText = "Configure render settings for mounting."
-        alert.addButton(withTitle: "Mount")
-        alert.addButton(withTitle: "Use Defaults")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = loadSaved ? "Customize Render Options" : "Render Options"
+        alert.informativeText = loadSaved ? "Configure default render settings." : "Configure render settings for mounting."
+        if loadSaved {
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Cancel")
+        } else {
+            alert.addButton(withTitle: "Mount")
+            alert.addButton(withTitle: "Use Defaults")
+            alert.addButton(withTitle: "Cancel")
+        }
 
         let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 340))
 
         // --- 1. Top Section: Checkboxes (Processing) ---
         let vignetteCorrectionCheckbox = NSButton(checkboxWithTitle: "Enable Vignette Correction", target: nil, action: nil)
         vignetteCorrectionCheckbox.frame = NSRect(x: 20, y: 310, width: 250, height: 18)
-        vignetteCorrectionCheckbox.state = .on
+        vignetteCorrectionCheckbox.state = options.applyVignetteCorrection ? .on : .off
         accessoryView.addSubview(vignetteCorrectionCheckbox)
 
         let normalizeShadingCheckbox = NSButton(checkboxWithTitle: "Scale data (normalize shading map)", target: nil, action: nil)
         normalizeShadingCheckbox.frame = NSRect(x: 45, y: 285, width: 280, height: 18)
-        normalizeShadingCheckbox.state = .on
+        normalizeShadingCheckbox.state = options.normalizeShadingMap ? .on : .off
         accessoryView.addSubview(normalizeShadingCheckbox)
 
         let vignetteOnlyColorCheckbox = NSButton(checkboxWithTitle: "Color correction only", target: nil, action: nil)
         vignetteOnlyColorCheckbox.frame = NSRect(x: 45, y: 263, width: 200, height: 18)
+        vignetteOnlyColorCheckbox.state = options.vignetteOnlyColor ? .on : .off
         accessoryView.addSubview(vignetteOnlyColorCheckbox)
 
         // Handler for nesting logic
@@ -334,11 +400,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let cfrModePopup = NSPopUpButton(frame: NSRect(x: 10, y: 5, width: 200, height: 26))
         cfrModePopup.addItems(withTitles: ["Disabled", "Prefer Integer", "Prefer Drop Frame", "Median (Slow Motion)", "Average (Testing)", "Custom"])
-        cfrModePopup.selectItem(at: 0)
+        if options.cfrEnabled {
+            if !options.cfrCustomValue.isEmpty {
+                cfrModePopup.selectItem(at: 5) // Custom
+            } else {
+                switch options.cfrMode {
+                case .preferInteger: cfrModePopup.selectItem(at: 1)
+                case .preferDropFrame: cfrModePopup.selectItem(at: 2)
+                case .medianSlowMotion: cfrModePopup.selectItem(at: 3)
+                case .averageTesting: cfrModePopup.selectItem(at: 4)
+                default: cfrModePopup.selectItem(at: 0)
+                }
+            }
+        } else {
+            cfrModePopup.selectItem(at: 0)
+        }
         cfrGroup.addSubview(cfrModePopup)
 
         let cfrCustomContainer = NSView(frame: NSRect(x: 220, y: 5, width: 200, height: 30))
-        cfrCustomContainer.isHidden = true
+        cfrCustomContainer.isHidden = !options.cfrEnabled || options.cfrCustomValue.isEmpty
         cfrGroup.addSubview(cfrCustomContainer)
 
         let cfrCustomLabel = NSTextField(labelWithString: "FPS:")
@@ -346,7 +426,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         cfrCustomContainer.addSubview(cfrCustomLabel)
 
         let cfrCustomField = NSTextField(frame: NSRect(x: 35, y: 4, width: 60, height: 21))
-        cfrCustomField.stringValue = "24.00"
+        cfrCustomField.stringValue = options.cfrCustomValue.isEmpty ? "24.00" : options.cfrCustomValue
         cfrCustomField.placeholderString = "24.00"
         cfrCustomContainer.addSubview(cfrCustomField)
 
@@ -362,16 +442,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let levelsModePopup = NSPopUpButton(frame: NSRect(x: 10, y: 5, width: 200, height: 26))
         levelsModePopup.addItems(withTitles: LevelsMode.allCases.map { $0.rawValue })
-        levelsModePopup.selectItem(withTitle: "Dynamic")
+        levelsModePopup.selectItem(withTitle: options.levelsMode.rawValue)
         levelsGroup.addSubview(levelsModePopup)
 
         let levelsCustomContainer = NSView(frame: NSRect(x: 220, y: 5, width: 240, height: 30))
-        levelsCustomContainer.isHidden = true
+        levelsCustomContainer.isHidden = options.levelsMode != .custom || options.levelsCustomValue.isEmpty
         levelsGroup.addSubview(levelsCustomContainer)
 
         let levelsCustomField = NSTextField(frame: NSRect(x: 0, y: 4, width: 100, height: 21))
         levelsCustomField.placeholderString = "16383/1024"
-        levelsCustomField.stringValue = "16383/1024"
+        levelsCustomField.stringValue = options.levelsCustomValue.isEmpty ? "16383/1024" : options.levelsCustomValue
         levelsCustomContainer.addSubview(levelsCustomField)
 
         // --- 4. Camera Model Section ---
@@ -380,15 +460,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let camModelPopup = NSPopUpButton(frame: NSRect(x: 10, y: 5, width: 140, height: 26))
         camModelPopup.addItems(withTitles: CameraModel.allCases.map { $0.rawValue })
-        camModelPopup.selectItem(withTitle: "Disabled")
+        camModelPopup.selectItem(withTitle: options.cameraModel.rawValue)
         camGroup.addSubview(camModelPopup)
 
         let camCustomContainer = NSView(frame: NSRect(x: 160, y: 5, width: 300, height: 30))
-        camCustomContainer.isHidden = true
+        camCustomContainer.isHidden = options.cameraModel != .custom || options.cameraModelCustomValue.isEmpty
         camGroup.addSubview(camCustomContainer)
 
         let camCustomField = NSTextField(frame: NSRect(x: 0, y: 4, width: 150, height: 21))
         camCustomField.placeholderString = "e.g., Sony, Canon"
+        camCustomField.stringValue = options.cameraModelCustomValue
         camCustomContainer.addSubview(camCustomField)
 
         // --- Visibility Handlers ---
@@ -428,64 +509,62 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // --- Response Handling ---
         let response = alert.runModal()
-        if response == .alertThirdButtonReturn {
-            return nil
-        }
-        if response == .alertFirstButtonReturn {
-            options.applyVignetteCorrection = vignetteCorrectionCheckbox.state == .on
-            options.normalizeShadingMap = normalizeShadingCheckbox.state == .on
-            options.vignetteOnlyColor = vignetteOnlyColorCheckbox.state == .on
 
-            // CFR
-            let selCFR = cfrModePopup.indexOfSelectedItem
-            if selCFR > 0 {
-                options.cfrEnabled = true
-                if selCFR == 5 { // Custom
-                    let val = cfrCustomField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                    options.cfrCustomValue = (Double(val) != nil) ? val : "24.00"
-                } else {
-                    let modes: [CFRMode] = [.disabled, .preferInteger, .preferDropFrame, .medianSlowMotion, .averageTesting, .disabled]
-                    options.cfrMode = modes[selCFR]
-                }
+        // Handle cancel (always second button when loadSaved, third button otherwise)
+        if loadSaved {
+            if response == .alertSecondButtonReturn {
+                return nil
             }
-
-            // Levels
-            if let title = levelsModePopup.selectedItem?.title {
-                if title == "Custom" {
-                    options.levelsMode = .custom
-                    options.levelsCustomValue = levelsCustomField.stringValue
-                } else {
-                    options.levelsMode = LevelsMode.allCases.first(where: { $0.rawValue == title }) ?? .dynamic
-                }
+        } else {
+            if response == .alertThirdButtonReturn {
+                return nil
             }
-
-            // Camera
-            if let title = camModelPopup.selectedItem?.title {
-                if title == "Custom" {
-                    options.cameraModel = .custom
-                    options.cameraModelCustomValue = camCustomField.stringValue
-                } else {
-                    options.cameraModel = CameraModel.allCases.first(where: { $0.rawValue == title }) ?? .disabled
-                }
+            // Use Defaults button - return default options
+            if response == .alertSecondButtonReturn {
+                return RenderOptions()
             }
         }
-        return options
-    }
 
-    private func showRenderOptionsDialogLoop(for fileURL: URL) {
-        while true {
-            if let options = showRenderOptionsDialog(for: fileURL) {
-                Task { @MainActor in
-                    do {
-                        try await mountSingleFile(at: fileURL, with: options)
-                        showAlertAndExit(message: "✅ Mounted successfully.")
-                    } catch {
-                        showAlertAndExit(message: "❌ Mount failed: \(error)")
-                    }
-                }
-            }
-            return
+        // Build options from UI state
+        var resultOptions = RenderOptions()
+        resultOptions.applyVignetteCorrection = vignetteCorrectionCheckbox.state == .on
+        resultOptions.normalizeShadingMap = normalizeShadingCheckbox.state == .on
+        resultOptions.vignetteOnlyColor = vignetteOnlyColorCheckbox.state == .on
+
+        // CFR
+        let selCFR = cfrModePopup.indexOfSelectedItem
+        if selCFR > 0 && selCFR != 5 {
+            resultOptions.cfrEnabled = true
+            let modes: [CFRMode] = [.disabled, .preferInteger, .preferDropFrame, .medianSlowMotion, .averageTesting, .disabled]
+            resultOptions.cfrMode = modes[selCFR]
+        } else if selCFR == 5 {
+            // Custom
+            resultOptions.cfrEnabled = true
+            let val = cfrCustomField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            resultOptions.cfrCustomValue = (Double(val) != nil) ? val : "24.00"
         }
+
+        // Levels
+        if let title = levelsModePopup.selectedItem?.title {
+            if title == "Custom" {
+                resultOptions.levelsMode = .custom
+                resultOptions.levelsCustomValue = levelsCustomField.stringValue
+            } else {
+                resultOptions.levelsMode = LevelsMode.allCases.first(where: { $0.rawValue == title }) ?? .dynamic
+            }
+        }
+
+        // Camera
+        if let title = camModelPopup.selectedItem?.title {
+            if title == "Custom" {
+                resultOptions.cameraModel = .custom
+                resultOptions.cameraModelCustomValue = camCustomField.stringValue
+            } else {
+                resultOptions.cameraModel = CameraModel.allCases.first(where: { $0.rawValue == title }) ?? .disabled
+            }
+        }
+
+        return resultOptions
     }
 
     // MARK: - Alert Dialogs
@@ -540,53 +619,75 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             disableAlert.messageText = "Please enable the MotionCamFuse filesystem and try again."
             disableAlert.addButton(withTitle: "OK")
             _ = disableAlert.runModal()
-            NSWorkspace.shared.open("x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.fskit.fsmodule")
+            NSWorkspace.shared.open(
+              URL(string:
+                "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.fskit.fsmodule"
+              )!
+            )
             exit(EXIT_FAILURE)
         }
     }
 
     private func showMountOptionsAlert(for fileURL: URL) {
-        let alert = NSAlert()
-        alert.messageText = "Mount Options"
-        alert.informativeText = fileURL.lastPathComponent
-        alert.addButton(withTitle: "Just This File")
-        alert.addButton(withTitle: "All Files in Folder")
-        alert.addButton(withTitle: "Mount with Options")
-        alert.addButton(withTitle: "Cancel")
+        while true {
+            let savedOptions = RenderOptions.load()
+            let alert = NSAlert()
+            alert.messageText = "Mount Options"
+            alert.informativeText = fileURL.lastPathComponent + "\n\nCurrent render options:\n" + savedOptions.descriptionText()
+            alert.addButton(withTitle: "Just This File")
+            alert.addButton(withTitle: "All Files in Folder")
+            alert.addButton(withTitle: "Customize Options")
+            alert.addButton(withTitle: "Cancel")
 
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            Task { @MainActor in
-                do {
-                    try await mountSingleFile(at: fileURL)
-                    showAlertAndExit(message: "✅ Mounted successfully.")
-                } catch {
-                    showAlertAndExit(message: "❌ Mount failed: \(error)")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                let options = RenderOptions.load()
+                Task { @MainActor in
+                    do {
+                        try await mountSingleFile(at: fileURL, with: options)
+                        showAlertAndExit(message: "✅ Mounted successfully.")
+                    } catch {
+                        if let mountError = error as? MountError {
+                            handleDisabledError(mountError)
+                        }
+                        showAlertAndExit(message: "❌ Mount failed: \(error)")
+                    }
                 }
+                return
+            case .alertSecondButtonReturn:
+                mountAllFiles(in: fileURL.deletingLastPathComponent())
+                return
+            case .alertThirdButtonReturn:
+                if let options = showRenderOptionsDialog(for: fileURL, loadSaved: true) {
+                    RenderOptions.save(options)
+                    // Loop back to show the alert with updated options
+                } else {
+                    // User cancelled, exit
+                    exit(EXIT_FAILURE)
+                }
+            default:
+                exit(EXIT_FAILURE)
             }
-        case .alertSecondButtonReturn:
-            mountAllFiles(in: fileURL.deletingLastPathComponent())
-        case .alertThirdButtonReturn:
-            showRenderOptionsDialogLoop(for: fileURL)
-        default:
-            exit(EXIT_FAILURE)
         }
     }
 
     private func showMultipleFilesAlert(for urls: [URL]) {
+        let savedOptions = RenderOptions.load()
         let alert = NSAlert()
         alert.messageText = "Mount \(urls.count) files?"
-        alert.informativeText = "Selected files will be mounted with default settings."
+        alert.informativeText = "Files will be mounted with your saved render options:\n" + savedOptions.descriptionText()
         alert.addButton(withTitle: "Mount")
-        alert.addButton(withTitle: "Mount with Options")
+        alert.addButton(withTitle: "Customize Options")
         alert.addButton(withTitle: "Cancel")
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            Task { await mountMultipleFiles(urls) }
+            let options = RenderOptions.load()
+            Task { await mountMultipleFiles(urls, with: options) }
         case .alertSecondButtonReturn:
-            let options = showRenderOptionsDialog(for: urls[0])
+            let options = showRenderOptionsDialog(for: urls[0], loadSaved: true)
             if let options = options {
+                RenderOptions.save(options)
                 Task { await mountMultipleFiles(urls, with: options) }
             }
         default:
