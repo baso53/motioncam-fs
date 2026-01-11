@@ -1,0 +1,6 @@
+module MotioncamModule {
+    header "VirtualFileSystemImpl_MCRAW.h"
+    header "Types.h"
+
+    export *
+}

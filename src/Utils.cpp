@@ -1,14 +1,15 @@
 #include "Utils.h"
-#include "Measure.h"
 
 #include "CameraFrameMetadata.h"
 #include "CameraMetadata.h"
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <vector>
+#include <dispatch/dispatch.h>
 
-#include <boost/iostreams/stream.hpp>
-#include <boost/iostreams/device/back_inserter.hpp>
+#include <arm_neon.h>
 
 #define TINY_DNG_WRITER_IMPLEMENTATION 1
 
@@ -245,8 +246,6 @@ void encodeTo10Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo10Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -279,8 +278,6 @@ void encodeTo12Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo12Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -308,8 +305,6 @@ void encodeTo14Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo14Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -344,8 +339,6 @@ void encodeTo8Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo8Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -371,8 +364,6 @@ void encodeTo6Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo6Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -409,8 +400,6 @@ void encodeTo4Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo4Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -441,8 +430,6 @@ void encodeTo2Bit(
     uint32_t& width,
     uint32_t& height)
 {
-    Measure m("encodeTo2Bit");
-
     uint16_t* srcPtr = reinterpret_cast<uint16_t*>(data.data());
     uint8_t* dstPtr = data.data();
 
@@ -1066,8 +1053,6 @@ std::shared_ptr<std::vector<char>> generateDng(
     double baselineExpValue,
     const RenderSettings& settings)
 {
-    Measure m("generateDng");
-
     unsigned int width = metadata.width;
     unsigned int height = metadata.height;
 
@@ -1110,11 +1095,11 @@ std::shared_ptr<std::vector<char>> generateDng(
         settings.levels,
         settings.logTransform,
         settings.quadBayerOption,
-        true  // includeOpcode = true to generate lens shading opcode when not applied to image
+        false  // includeOpcode = true to generate lens shading opcode when not applied to image
     );
 
-    spdlog::debug("New black level {},{},{},{} and white level {}",
-                  dstBlackLevel[0], dstBlackLevel[1], dstBlackLevel[2], dstBlackLevel[3], dstWhiteLevel);
+//    spdlog::debug("New black level {},{},{},{} and white level {}",
+//                  dstBlackLevel[0], dstBlackLevel[1], dstBlackLevel[2], dstBlackLevel[3], dstWhiteLevel);
 
     // Encode to reduce size in container
     auto encodeBits = bitsNeeded(dstWhiteLevel);
@@ -1157,7 +1142,6 @@ std::shared_ptr<std::vector<char>> generateDng(
     dng.SetBigEndian(false);
     dng.SetDNGVersion(1, 4, 0, 0);
     dng.SetDNGBackwardVersion(1, 1, 0, 0);
-    dng.SetImageData(reinterpret_cast<const unsigned char*>(processedData.data()), processedData.size());
     dng.SetImageWidth(width);
     dng.SetImageLength(height);
     dng.SetPlanarConfig(tinydngwriter::PLANARCONFIG_CONTIG);
@@ -1363,10 +1347,6 @@ std::shared_ptr<std::vector<char>> generateDng(
     // Write DNG
     std::string err;
 
-    tinydngwriter::DNGWriter writer(false);
-
-    writer.AddImage(&dng);
-
     // Save to memory
     auto output = std::make_shared<std::vector<char>>();
 
@@ -1375,7 +1355,7 @@ std::shared_ptr<std::vector<char>> generateDng(
 
     utils::vector_ostream stream(*output);
 
-    writer.WriteToFile(stream, &err);
+    dng.WriteToFile(stream, &err, reinterpret_cast<const unsigned char*>(processedData.data()), processedData.size());
 
     return output;
 }

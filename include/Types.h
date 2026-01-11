@@ -4,7 +4,7 @@
 #include <string>
 #include <variant>
 
-#include <boost/filesystem.hpp>
+#include <filesystem>
 
 namespace motioncam {
 
@@ -45,8 +45,8 @@ struct Entry {
                name == other.name;
     }
 
-    boost::filesystem::path getFullPath() const {
-        namespace fs = boost::filesystem;
+    std::filesystem::path getFullPath() const {
+        namespace fs = std::filesystem;
 
         fs::path result;
 

@@ -1,108 +1,50 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.26)
 
 if(APPLE)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum OS X deployment version")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0")
 endif()
 
-project(MotionCamFuse VERSION 1.0 LANGUAGES CXX)
+project(MotionCamFuse VERSION 1.0 LANGUAGES CXX Swift)
 
-set(CMAKE_AUTOUIC ON)
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Network)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Network)
 
 set(APP_NAME "MotionCam Fuse")
 set(DEPENDENCIES_PATH deps)
 
-# set(Boost_DEBUG 1)
-
-set(MACOS_BUNDLE_ICON_FILE app_icon.icns)
+if ("${CMAKE_GENERATOR}" MATCHES "Xcode")
+  set(CMAKE_CONFIGURATION_TYPES "Release" CACHE STRING
+      "Available build configurations" FORCE)
+endif()
 
 set(PROJECT_SOURCES
-        src/main.cpp
-        src/mainwindow.cpp
         src/VirtualFileSystemImpl_MCRAW.cpp
         src/CameraMetadata.cpp
         src/CameraFrameMetadata.cpp
         src/AudioWriter.cpp
         src/Utils.cpp
 
-        include/mainwindow.h
         include/Types.h
         include/IVirtualFileSystem.h
         include/IFuseFileSystem.h
         include/VirtualFileSystemImpl_MCRAW.h
-        include/LRUCache.h
         include/AudioWriter.h
-        include/Measure.h
-        include/SingleApplication.h
         include/CameraMetadata.h
         include/CameraFrameMetadata.h
         include/Utils.h
 
-        ui/mainwindow.ui
+        src/macos/McrawFrame.swift
+        src/macos/McrawFS.swift
+        src/macos/McrawFSVolume.swift
+        src/macos/McrawMounterExtension.swift
+        src/macos/McrawRootItem.swift
 )
-
-qt_add_resources(PROJECT_SOURCES
-    resources.qrc
-    qdarkstyle/dark/darkstyle.qrc)
-
-if(WIN32)
-    list(APPEND PROJECT_SOURCES
-        resources/app.rc
-
-        src/win/FuseFileSystemImpl_Win.cpp
-        src/win/virtualizationInstance.cpp
-        src/win/dirInfo.cpp
-
-        include/win/dirInfo.h
-        include/win/FuseFileSystemImpl_Win.h
-        include/win/virtualizationInstance.h)
-
-    find_library(projected-fs ProjectedFSLib)
-
-    set(platform-specific ${projected-fs})
-elseif(APPLE)
-  list(APPEND PROJECT_SOURCES
-      ${MACOS_BUNDLE_ICON_FILE}
-      src/macos/FuseFileSystemImpl_MacOS.cpp
-      include/macos/FuseFileSystemImpl_MacOS.h)
-
-  find_library(FUSE_T_FRAMEWORK fuse_t)
-
-  set(platform-specific ${FUSE_T_FRAMEWORK})
-
-endif()
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS ui)
 
-if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
-    qt_add_executable(${PROJECT_NAME}
-        MANUAL_FINALIZATION
-        ${PROJECT_SOURCES}
-    )
-# Define target properties for Android with Qt 6 as:
-#    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR
-#                 ${CMAKE_CURRENT_SOURCE_DIR}/android)
-# For more information, see https://doc.qt.io/qt-6/qt-add-executable.html#target-creation
-else()
-    if(ANDROID)
-        add_library(${PROJECT_NAME} SHARED
-            ${PROJECT_SOURCES}
-        )
-# Define properties for Android with Qt 5 after find_package() calls as:
-#    set(ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android")
-    else()
-        add_executable(${PROJECT_NAME}
-            ${PROJECT_SOURCES}
-        )
-    endif()
-endif()
+add_executable(${PROJECT_NAME}
+    ${PROJECT_SOURCES}
+)
 
 target_include_directories(${PROJECT_NAME} PRIVATE include)
 
@@ -128,61 +70,44 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE _FILE_OFFSET_BITS=64 FUSE_USE
 #     )
 # endif()
 
-# Add motioncam decoder as static library
-add_library(motioncam-decoder STATIC
+# Instead, compile the decoder sources right into the fuse target:
+target_sources(${PROJECT_NAME} PRIVATE
     ${DEPENDENCIES_PATH}/motioncam-decoder/lib/Decoder.cpp
     ${DEPENDENCIES_PATH}/motioncam-decoder/lib/RawData.cpp
-    ${DEPENDENCIES_PATH}/motioncam-decoder/lib/RawData_Legacy.cpp)
-
-target_include_directories(motioncam-decoder
-    PUBLIC
+    ${DEPENDENCIES_PATH}/motioncam-decoder/lib/RawData_Legacy.cpp
+)
+target_include_directories(${PROJECT_NAME} PRIVATE
     ${DEPENDENCIES_PATH}/bw64/include
     ${DEPENDENCIES_PATH}/motioncam-decoder/thirdparty
     ${DEPENDENCIES_PATH}/motioncam-decoder/lib/include
 )
-
-# Find the packages using vcpkg
-find_package(spdlog CONFIG REQUIRED)
-find_package(fmt CONFIG REQUIRED)  # Explicitly find fmt as well
-
-# Add boost
-set(Boost_USE_STATIC_LIBS        ON)
-set(Boost_USE_DEBUG_LIBS        OFF)
-set(Boost_USE_RELEASE_LIBS       ON)
-set(Boost_USE_MULTITHREADED      ON)
-set(Boost_USE_STATIC_RUNTIME    OFF)
-
-find_package(Boost 1.86.0 REQUIRED COMPONENTS filesystem algorithm locale)
-if(Boost_FOUND)
-  include_directories(${Boost_INCLUDE_DIRS})
-endif()
-
-target_link_libraries(${PROJECT_NAME} PRIVATE
-  Qt${QT_VERSION_MAJOR}::Widgets
-  Qt${QT_VERSION_MAJOR}::Network
-  ${Boost_FILESYSTEM_LIBRARY}
-  spdlog::spdlog
-  fmt::fmt
-  motioncam-decoder
-  ${platform-specific})
-
-set(MACOSX_BUNDLE_GUI_IDENTIFIER "com.motioncam.fuse")
-
-# Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
-# If you are developing for iOS or macOS you should consider setting an
-# explicit, fixed bundle identifier manually though.
-if(${QT_VERSION} VERSION_LESS 6.1.0)
-  set(BUNDLE_ID_OPTION MACOSX_BUNDLE_GUI_IDENTIFIER com.motioncam.fuse)
-endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE ${platform-specific})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
-    ${BUNDLE_ID_OPTION}
-    MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
-    MACOSX_BUNDLE_ICON_FILE ${MACOS_BUNDLE_ICON_FILE}
-    MACOSX_BUNDLE_BUNDLE_NAME ${APP_NAME}
+    BUNDLE_EXTENSION "appex"
+    XCODE_ATTRIBUTE_WRAPPER_EXTENSION "appex"
+
+    # point at your custom Info.plist (which must include an NSExtension dictionary)
     MACOSX_BUNDLE TRUE
-    WIN32_EXECUTABLE TRUE
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/Info.plist"
+
+    # Xcode-specific: mark as an ExtensionKit extension
+    XCODE_PRODUCT_TYPE "com.apple.product-type.extensionkit-extension"
+
+    XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/McrawMounterExtension.entitlements"
+    XCODE_ATTRIBUTE_GENERATE_INFOPLIST_FILE YES
+    XCODE_ATTRIBUTE_SWIFT_VERSION 6
+    XCODE_ATTRIBUTE_SWIFT_OBJC_INTEROP_MODE "objcxx"
+    XCODE_ATTRIBUTE_SWIFT_DISABLE_SAFETY_CHECKS YES
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "hr.leadtheway.motioncamexplorer.extension"
+    XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL 3
+    XCODE_ATTRIBUTE_LLVM_LTO YES
+    XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME YES
+    XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--timestamp"
+    XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS NO
+    XCODE_ATTRIBUTE_DEAD_CODE_STRIPPING YES
+    XCODE_ATTRIBUTE_ENABLE_APP_SANDBOX YES
+    XCODE_ATTRIBUTE_GCC_INLINES_ARE_PRIVATE_EXTERN YES
 )
 
 set_source_files_properties(${MACOS_BUNDLE_ICON_FILE} PROPERTIES
@@ -196,6 +121,27 @@ install(TARGETS ${PROJECT_NAME}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+# Add MotionCamExplorer target (empty macOS app for embedding)
+add_executable(MotionCamExplorer MACOSX_BUNDLE
+    src/macos/client/MotionCamExplorer.swift
+)
+
+set_target_properties(MotionCamExplorer PROPERTIES
+    # point at your custom Info.plist (which must include an NSExtension dictionary)
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/client/Info.plist"
+
+    XCODE_ATTRIBUTE_GENERATE_INFOPLIST_FILE YES
+    XCODE_ATTRIBUTE_SWIFT_VERSION 6
+    XCODE_ATTRIBUTE_SWIFT_DISABLE_SAFETY_CHECKS YES
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "hr.leadtheway.motioncamexplorer"
+    XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL 3
+    XCODE_ATTRIBUTE_LLVM_LTO YES
+    XCODE_EMBED_EXTENSIONKIT_EXTENSIONS "${PROJECT_NAME}"
+    XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME YES
+    XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--timestamp"
+    XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS NO
+)
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(${PROJECT_NAME})
     
